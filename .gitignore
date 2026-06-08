@@ -1,0 +1,31 @@
+# AI souce
+instruction.md
+CHECKLIST.md
+
+# Build outputs
+/build/
+*.exe
+
+# Go
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated assets
+assets/bundled.go
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Local env overrides
+.env
+.env.local
