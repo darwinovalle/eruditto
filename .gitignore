@@ -5,6 +5,8 @@ CHECKLIST.md
 # Build outputs
 /build/
 *.exe
+build/
+dist/
 
 # Go
 vendor/
@@ -14,6 +16,8 @@ vendor/
 .vscode/
 *.swp
 *.swo
+*~
+.DS_Store
 
 # OS
 .DS_Store
@@ -23,9 +27,38 @@ Thumbs.db
 assets/bundled.go
 
 # Test coverage
+*.test
+*.out
 coverage.out
 coverage.html
 
 # Local env overrides
 .env
 .env.local
+
+#  SQLite database files 
+# Never commit user data or test databases
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+#  Go toolchain
+# Vendor directory if you ever use go mod vendor
+vendor/
+
+#  Fyne bundle output 
+# bundled.go is GENERATED — we commit it, but ignore the intermediate files
+assets/bundled_tmp/
+
+#  Packaging artifacts
+*.deb
+*.AppImage
+*.tar.gz
+packaging/appimage/squashfs-root/
+
+#  Binary
+eruditto
+cmd/eruditto/eruditto
