@@ -3,6 +3,7 @@ module github.com/darwinovalle/eruditto
 go 1.25.0
 
 require (
+	github.com/atotto/clipboard v0.1.4
 	golang.org/x/image v0.42.0
 	modernc.org/sqlite v1.52.0
 )
