@@ -3,6 +3,7 @@ module github.com/darwinovalle/eruditto
 go 1.25.0
 
 require (
+	fyne.io/systray v1.12.2
 	github.com/atotto/clipboard v0.1.4
 	golang.design/x/hotkey v0.6.1
 	golang.org/x/image v0.42.0
@@ -11,6 +12,7 @@ require (
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
