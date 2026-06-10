@@ -72,6 +72,9 @@ type Service struct {
 
 	events    chan Event
 
+	subscribersMu sync.Mutex
+	subscribers   []chan struct{}
+
 	// runCtx and runCancel coordinate the consumer goroutine.
 	// runCtx is cancelled by Stop; the consumer goroutine observes
 	// it and exits. We keep a separate context from the caller's
@@ -135,6 +138,30 @@ func NewService(
 // should range over it or select on a done signal.
 func (s *Service) Events() <-chan Event {
 	return s.events
+}
+
+// Subscribe returns a notification channel that receives a signal
+// whenever clipboard history changes.
+func (s *Service) Subscribe() <-chan struct{} {
+	ch := make(chan struct{}, 1)
+
+	s.subscribersMu.Lock()
+	s.subscribers = append(s.subscribers, ch)
+	s.subscribersMu.Unlock()
+
+	return ch
+}
+
+func (s *Service) notifySubscribers() {
+	s.subscribersMu.Lock()
+	defer s.subscribersMu.Unlock()
+
+	for _, ch := range s.subscribers {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // Start begins monitoring. It is safe to call Start at most once.
@@ -255,6 +282,7 @@ func (s *Service) persistClip(ctx context.Context, clip domain.Clip) {
 		"hash", clip.Hash,
 		"length", len(clip.Content),
 	)
+	s.notifySubscribers()
 
 	// After persisting, enforce the user's history cap. This is
 	// cheap (a single COUNT + maybe a DELETE) and keeps the

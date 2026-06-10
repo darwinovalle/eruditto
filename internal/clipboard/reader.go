@@ -114,6 +114,7 @@ func NewAtottoReader() Reader {
 func (a *atottoReader) ReadText() (string, error) {
 	s, err := clipboard.ReadAll()
 	if err != nil {
+		fmt.Printf("RAW CLIPBOARD ERROR: %#v\n", err)
 		return "", fmt.Errorf("clipboard: read text: %w", err)
 	}
 	return s, nil
