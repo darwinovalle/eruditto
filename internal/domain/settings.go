@@ -75,7 +75,7 @@ const (
 // DefaultSettings maps every known setting key to its default value.
 // The map is read-only at runtime — never modify it.
 var DefaultSettings = map[string]string{
-	KeyHotkey:         "ctrl+shift+v",
+	KeyHotkey:         "ctrl+shift+z",
 	KeyMaxHistory:     "5000",
 	KeyTheme:          "dark",
 	KeyStartOnBoot:    "false",

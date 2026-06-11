@@ -6,11 +6,12 @@ import (
 )
 
 func AutoPaste() error {
+	shortcut := DetectPasteShortcut()
 	cmd := exec.Command(
 		"xdotool",
 		"key",
 		"--clearmodifiers",
-		"ctrl+v",
+		shortcut,
 	)
 
 	if err := cmd.Run(); err != nil {
