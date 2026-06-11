@@ -16,10 +16,13 @@ package ui
 import (
 	"context"
 	"fmt"
+	"image/color"
+	"sort"
 	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
@@ -32,28 +35,15 @@ import (
 )
 
 // popupPageSize is the number of clips loaded per query.
-// 200 covers 10+ screens of content at typical row heights.
-// The SQLite query for 200 rows from an indexed table takes < 5ms.
 const popupPageSize = 200
 
 // previewMaxRunes is the character limit for the text preview in each row.
-const previewMaxRunes = 10
+const previewMaxRunes = 15
+
+// pinBlue is the soft dark blue background for pinned rows.
+var pinBlue = color.RGBA{45, 85, 135, 255} // #2d8187
 
 // PopupWindow is the clipboard history picker.
-//
-// Lifecycle:
-//
-//	New → (hidden) → Show() ↔ Hide()
-//	                  ↓
-//	           loads clips async
-//	           filters on search input
-//	           calls RestoreClip on selection
-//
-// Thread safety: all Fyne widget interactions must happen on the UI
-// goroutine. Async operations use fyne.CurrentApp().Driver().CanvasForObject
-// or the simpler pattern of sending results back via a channel and
-// calling widget methods inside a go func that the Fyne scheduler runs.
-// We use the binding package so data updates are automatically safe.
 type PopupWindow struct {
 	app      fyne.App
 	win      fyne.Window
@@ -68,19 +58,15 @@ type PopupWindow struct {
 	countLabel  *widget.Label
 	statusLabel *widget.Label
 
-	// clipChanged is signalled by NotifyClipChanged() whenever the
-	// history changes (new clip, delete, favorite toggle).
-	// The background listener reloads the list if the popup is visible.
 	clipChanged chan struct{}
 
 	built bool
+
+	// rowCache maps list row containers to their metadata.
+	rowCache map[fyne.CanvasObject]*clipRow
 }
 
 // NewPopupWindow constructs the popup. The window is hidden until Show().
-//
-//   - app     : the running Fyne application (needed to create windows)
-//   - clipSvc : clipboard service — used for RestoreClip
-//   - repo    : history repository — used to load clips and toggle favorites
 func NewPopupWindow(
 	app fyne.App,
 	clipSvc *clipboard.Service,
@@ -99,23 +85,20 @@ func NewPopupWindow(
 		app:         app,
 		clipSvc:     clipSvc,
 		repo:        repo,
-		clipChanged: make(chan struct{}, 1), // buffered: never blocks the sender
+		clipChanged: make(chan struct{}, 1),
+		rowCache:    make(map[fyne.CanvasObject]*clipRow),
 	}
 }
 
 // NotifyClipChanged signals the popup that clipboard history has changed.
-// Safe to call from any goroutine. Non-blocking: if a signal is already
-// pending, the new one is dropped (the pending reload covers it).
 func (p *PopupWindow) NotifyClipChanged() {
 	select {
 	case p.clipChanged <- struct{}{}:
-	default: // already pending, drop
+	default:
 	}
 }
 
-// StartListening starts the background goroutine that watches for
-// clip changes and reloads the popup list when it is visible.
-// Call once from main.go after construction. ctx is the root context.
+// StartListening starts the background goroutine that watches for clip changes.
 func (p *PopupWindow) StartListening(ctx context.Context) {
 	go func() {
 		for {
@@ -123,7 +106,6 @@ func (p *PopupWindow) StartListening(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-p.clipChanged:
-				// Only reload if the window is built and visible.
 				fyne.Do(func() {
 					if p.built && p.win.Content() != nil {
 						go p.loadClips(p.currentQuery())
@@ -134,8 +116,6 @@ func (p *PopupWindow) StartListening(ctx context.Context) {
 	}()
 }
 
-// currentQuery returns the current search entry text, or "" if not built.
-// Must be called on the UI goroutine.
 func (p *PopupWindow) currentQuery() string {
 	if p.searchEntry == nil {
 		return ""
@@ -144,7 +124,7 @@ func (p *PopupWindow) currentQuery() string {
 }
 
 // Show opens the popup and reloads clips fresh from the DB.
-// Safe to call from any goroutine.
+// Positions the window near the mouse cursor on the active screen.
 func (p *PopupWindow) Show() {
 	fyne.Do(func() {
 		if !p.built {
@@ -152,8 +132,8 @@ func (p *PopupWindow) Show() {
 		}
 		p.searchEntry.SetText("")
 		p.setStatus("Loading...")
-		p.win.Show()
-		p.win.RequestFocus()
+
+		p.showAndPosition()
 		go p.loadClips("")
 	})
 }
@@ -169,30 +149,27 @@ func (p *PopupWindow) Hide() {
 // Window construction
 // ─────────────────────────────────────────────────────────────────────────────
 
-// build constructs all widgets and the window layout.
-// Called exactly once; subsequent Show() calls reuse the built window.
 func (p *PopupWindow) build() {
-	p.win = p.app.NewWindow("Eruditto — Clipboard History")
-	p.win.Resize(fyne.NewSize(100, 300))
-	p.win.CenterOnScreen()
+	p.win = p.app.NewWindow("Eruditto")
+	p.win.Resize(fyne.NewSize(200, 300))
+	// p.win.CenterOnScreen()
+	p.win.SetFixedSize(true)
 
-	// Close on focus loss — standard Ditto-style behavior.
-	// When the user clicks elsewhere the window hides.
-	p.win.SetOnClosed(func() {}) // prevent destroy; we reuse the window
+	// Close on focus loss
+	p.win.SetOnClosed(func() {})
 	p.win.Canvas().SetOnTypedKey(p.handleKey)
 
 	// ── Search entry ──────────────────────────────────────────────────
 	p.searchEntry = widget.NewEntry()
-	p.searchEntry.SetPlaceHolder("Search clipboard history…")
+	p.searchEntry.SetPlaceHolder("Search clipboard...")
 	p.searchEntry.OnChanged = p.onSearchChanged
+
+	searchContainer := container.NewPadded(p.searchEntry)
 
 	// ── Clip list ─────────────────────────────────────────────────────
 	p.clipList = widget.NewList(
-		// Length: driven by len(filtered)
 		func() int { return len(p.filtered) },
-		// Create row template
 		p.createRow,
-		// Update row with data
 		p.updateRow,
 	)
 	p.clipList.OnSelected = p.onClipSelected
@@ -202,7 +179,7 @@ func (p *PopupWindow) build() {
 	p.statusLabel = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
 
 	hint := widget.NewLabelWithStyle(
-		"↵ paste · Esc close · ★ pin",
+		"↵ paste · esc close · ★ pin",
 		fyne.TextAlignTrailing,
 		fyne.TextStyle{Monospace: true},
 	)
@@ -210,16 +187,14 @@ func (p *PopupWindow) build() {
 	footer := container.NewHBox(p.countLabel, layout.NewSpacer(), hint)
 
 	// ── Layout ────────────────────────────────────────────────────────
-	// Search at top, list in middle (takes all remaining space), footer fixed at bottom.
 	content := container.NewBorder(
 		container.NewVBox(
-			p.searchEntry,
-			p.statusLabel,
+			searchContainer,
 			widget.NewSeparator(),
 		),
 		container.NewVBox(
 			widget.NewSeparator(),
-			footer,
+			container.NewPadded(footer),
 		),
 		nil, nil,
 		p.clipList,
@@ -230,157 +205,231 @@ func (p *PopupWindow) build() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// List row construction
+// Custom pin icon resource (pushpin SVG)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// clipRow is the struct behind each list row's template widget.
-// We store sub-widgets as fields so updateRow can reach them.
+var pinIconOutlined = fyne.NewStaticResource("pin_outlined.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-pin-icon lucide-pin"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>`))
+var pinIconFilled = fyne.NewStaticResource("pin_filled.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-pin-off-icon lucide-pin-off"><path d="M12 17v5"/><path d="M15 9.34V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H7.89"/><path d="m2 2 20 20"/><path d="M9 9v1.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h11"/></svg>`))
+
+// pinIcon returns the appropriate pin icon based on pinned state.
+func pinIcon(pinned bool) fyne.Resource {
+	if pinned {
+		return pinIconFilled
+	}
+	return pinIconOutlined
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tight layout with zero spacing
+// ─────────────────────────────────────────────────────────────────────────────
+
+// tightVBox is a layout that stacks items vertically with zero padding.
+type tightVBox struct{}
+
+func (t *tightVBox) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	y := float32(0)
+	for _, obj := range objects {
+		if !obj.Visible() {
+			continue
+		}
+		h := obj.MinSize().Height
+		obj.Resize(fyne.NewSize(size.Width, h))
+		obj.Move(fyne.NewPos(0, y))
+		y += h
+	}
+}
+
+func (t *tightVBox) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	h := float32(0)
+	w := float32(0)
+	for _, obj := range objects {
+		if !obj.Visible() {
+			continue
+		}
+		min := obj.MinSize()
+		h += min.Height
+		if min.Width > w {
+			w = min.Width
+		}
+	}
+	return fyne.NewSize(w, h)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// List row construction — Ultra-compact with zero-gap layout
+// ─────────────────────────────────────────────────────────────────────────────
+
 type clipRow struct {
 	container    *fyne.Container
+	bgRect       *canvas.Rectangle
 	previewLabel *widget.Label
 	timeLabel    *widget.Label
-	starBtn      *widget.Button
+	pinBtn       *widget.Button
 	deleteBtn    *widget.Button
-	index        int // current data index; set by updateRow
+	index        int
+	clipID       int64
 }
 
-// rowCache maps each container returned by createRow back to its clipRow,
-// so updateRow can access widgets directly without Objects[] index guessing.
-// Entries live for the lifetime of the list widget.
-var rowCache = map[fyne.CanvasObject]*clipRow{}
-
-// createRow returns a new template container for a list row.
-// Fyne calls this to create the reusable cell widgets.
 func (p *PopupWindow) createRow() fyne.CanvasObject {
+	// Background rectangle for pinned highlight
+	bgRect := canvas.NewRectangle(nil)
+
+	// Preview label - main content, single line
+	previewLabel := widget.NewLabel("")
+	previewLabel.Truncation = fyne.TextTruncateEllipsis
+	previewLabel.Wrapping = fyne.TextWrapOff
+
+	// Time label - small, subtle
+	timeLabel := widget.NewLabelWithStyle("", fyne.TextAlignLeading,
+		fyne.TextStyle{Italic: true})
+
+	// Pin button
+	pinBtn := widget.NewButtonWithIcon("", pinIcon(false), nil)
+	pinBtn.Importance = widget.LowImportance
+
+	// Delete button
+	deleteBtn := widget.NewButtonWithIcon("", theme.DeleteIcon(), nil)
+	deleteBtn.Importance = widget.LowImportance
+
+	// Right side: icons horizontal
+	rightSide := container.NewHBox(pinBtn, deleteBtn)
+
+	// Main content: preview + time with ZERO gap using custom layout
+	leftContent := container.New(&tightVBox{}, previewLabel, timeLabel)
+
+	// Full row: left content + right icons
+	rowContent := container.NewBorder(nil, nil, nil, rightSide, leftContent)
+
+	// Background + content
+	rowContainer := container.NewMax(bgRect, rowContent)
+
 	row := &clipRow{
-		previewLabel: widget.NewLabel(""),
-		timeLabel: widget.NewLabelWithStyle("", fyne.TextAlignTrailing,
-			fyne.TextStyle{Italic: true}),
-		starBtn:   widget.NewButtonWithIcon("", theme.RadioButtonIcon(), nil),
-		deleteBtn: widget.NewButtonWithIcon("", theme.DeleteIcon(), nil),
+		container:    rowContainer,
+		bgRect:       bgRect,
+		previewLabel: previewLabel,
+		timeLabel:    timeLabel,
+		pinBtn:       pinBtn,
+		deleteBtn:    deleteBtn,
 	}
 
-	row.previewLabel.Truncation = fyne.TextTruncateEllipsis
-	row.previewLabel.Wrapping = fyne.TextWrapOff
-	row.starBtn.Importance = widget.LowImportance
-	row.deleteBtn.Importance = widget.DangerImportance
-
-	row.container = container.NewBorder(
-		nil, nil, nil,
-		container.NewHBox(row.timeLabel, row.starBtn, row.deleteBtn),
-		row.previewLabel,
-	)
-
-	// Register so updateRow can look up widgets by container pointer.
-	rowCache[row.container] = row
-	return row.container
+	p.rowCache[rowContainer] = row
+	return rowContainer
 }
 
-// updateRow populates a reused row container with data from filtered[i].
-// Fyne calls this whenever a row scrolls into view.
 func (p *PopupWindow) updateRow(id widget.ListItemID, obj fyne.CanvasObject) {
 	if int(id) >= len(p.filtered) {
 		return
 	}
 	clip := p.filtered[id]
 
-	row, ok := rowCache[obj]
+	row, ok := p.rowCache[obj]
 	if !ok {
 		return
 	}
 
+	// Update preview text
 	if clip.Type == domain.ClipTypeImage {
 		row.previewLabel.SetText("[image]")
 	} else {
 		row.previewLabel.SetText(clip.DisplayContent(previewMaxRunes))
 	}
-	row.timeLabel.SetText(relativeTime(clip.CreatedAt))
-	if clip.IsFavorite {
-		row.starBtn.SetIcon(theme.RadioButtonCheckedIcon())
-	} else {
-		row.starBtn.SetIcon(theme.RadioButtonIcon())
-	}
 
+	// Update time
+	row.timeLabel.SetText(relativeTime(clip.CreatedAt))
+
+	// Update pin icon appearance
+	row.pinBtn.SetIcon(pinIcon(clip.IsFavorite))
+
+	// Update button handlers
 	clipID := clip.ID
 	clipIdx := id
-	row.starBtn.OnTapped = func() { p.toggleFavorite(clipID, clipIdx) }
-	row.deleteBtn.OnTapped = func() { p.confirmDelete(clipID, clipIdx) }
+	row.clipID = clipID
+	row.index = int(clipIdx)
+
+	row.pinBtn.OnTapped = func() { p.toggleFavorite(clipID, int(clipIdx)) }
+	row.deleteBtn.OnTapped = func() { p.confirmDelete(clipID, int(clipIdx)) }
+
+	// Background: dark blue when pinned, transparent when not
+	if clip.IsFavorite {
+		row.bgRect.FillColor = pinBlue
+	} else {
+		row.bgRect.FillColor = nil
+	}
+	row.bgRect.Refresh()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Data loading
+// Data loading — Pinned clips always stay at the top
 // ─────────────────────────────────────────────────────────────────────────────
 
-// loadClips fetches clips from the repository in a background goroutine
-// and updates the list on the UI thread via a channel.
 func (p *PopupWindow) loadClips(query string) {
-    ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-    defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 
-    // query := p.searchEntry.Text
+	var (
+		clips []domain.Clip
+		err   error
+	)
 
-    var (
-        clips []domain.Clip
-        err   error
-    )
+	if strings.TrimSpace(query) == "" {
+		clips, err = p.repo.Recent(ctx, popupPageSize)
+	} else {
+		clips, err = p.repo.Search(ctx, query, popupPageSize)
+	}
 
-    if strings.TrimSpace(query) == "" {
-        clips, err = p.repo.Recent(ctx, popupPageSize)
-    } else {
-        clips, err = p.repo.Search(ctx, query, popupPageSize)
-    }
+	fyne.Do(func() {
+		if err != nil {
+			p.setStatus("Failed to load clips: " + err.Error())
+			return
+		}
 
-    fyne.Do(func() {
-        if err != nil {
-            p.setStatus("Failed to load clips: " + err.Error())
-            return
-        }
+		// Sort: pinned clips first, then by creation time (newest first)
+		sort.Slice(clips, func(i, j int) bool {
+			if clips[i].IsFavorite != clips[j].IsFavorite {
+				return clips[i].IsFavorite // true comes first
+			}
+			return clips[i].CreatedAt.After(clips[j].CreatedAt)
+		})
 
-        p.allClips = clips
-        p.filtered = clips
+		p.allClips = clips
+		p.filtered = clips
 
-        p.refreshList()
+		p.refreshList()
 
-        if len(clips) == 0 {
-            if strings.TrimSpace(query) != "" {
-                p.setStatus(fmt.Sprintf("No results for %q", query))
-            } else {
-                p.setStatus("No clipboard history yet. Copy something!")
-            }
-        } else {
-            p.setStatus("")
-        }
+		if len(clips) == 0 {
+			if strings.TrimSpace(query) != "" {
+				p.setStatus(fmt.Sprintf("No results for %q", query))
+			} else {
+				p.setStatus("No clipboard history yet. Copy something!")
+			}
+		} else {
+			p.setStatus("")
+		}
 
-        p.updateCountLabel()
-    })
+		p.updateCountLabel()
+	})
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Search
+// Search — Pinned clips stay at top even when filtering
 // ─────────────────────────────────────────────────────────────────────────────
 
-// onSearchChanged is called on every keystroke in the search entry.
-// For non-empty queries it fires a fresh database search (FTS5 is fast).
-// For empty queries it restores the full allClips slice without a DB round-trip.
 func (p *PopupWindow) onSearchChanged(query string) {
-    if strings.TrimSpace(query) == "" {
-        p.filtered = p.allClips
-        p.refreshList()
-        p.setStatus("")
-        p.updateCountLabel()
-        return
-    }
+	if strings.TrimSpace(query) == "" {
+		p.filtered = p.allClips
+		p.refreshList()
+		p.setStatus("")
+		p.updateCountLabel()
+		return
+	}
 
-    go p.loadClips(query)
+	go p.loadClips(query)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Selection & actions
 // ─────────────────────────────────────────────────────────────────────────────
 
-// onClipSelected is called when the user single-clicks a row.
-// Double-click in Fyne fires OnSelected twice in quick succession;
-// we treat a single selection as the paste trigger (matches Ditto UX).
 func (p *PopupWindow) onClipSelected(id widget.ListItemID) {
 	if id >= len(p.filtered) {
 		return
@@ -389,7 +438,6 @@ func (p *PopupWindow) onClipSelected(id widget.ListItemID) {
 	p.pasteClip(clip)
 }
 
-// pasteClip calls RestoreClip and hides the popup.
 func (p *PopupWindow) pasteClip(clip domain.Clip) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -417,7 +465,6 @@ func (p *PopupWindow) pasteClip(clip domain.Clip) {
 	}()
 }
 
-// toggleFavorite flips the favorite flag for a clip and refreshes the row.
 func (p *PopupWindow) toggleFavorite(clipID int64, idx int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -428,19 +475,36 @@ func (p *PopupWindow) toggleFavorite(clipID int64, idx int) {
 		return
 	}
 
-	// Update in-memory slice so the row refreshes without a reload.
-	if idx < len(p.filtered) {
-		p.filtered[idx].IsFavorite = newVal
-	}
-	// Also update allClips so a search-clear doesn't revert the icon.
+	// Update in-memory slices
 	for i := range p.allClips {
 		if p.allClips[i].ID == clipID {
 			p.allClips[i].IsFavorite = newVal
 			break
 		}
 	}
+	for i := range p.filtered {
+		if p.filtered[i].ID == clipID {
+			p.filtered[i].IsFavorite = newVal
+			break
+		}
+	}
 
-	p.clipList.RefreshItem(idx)
+	// Re-sort to move pinned/unpinned to correct positions
+	sort.Slice(p.filtered, func(i, j int) bool {
+		if p.filtered[i].IsFavorite != p.filtered[j].IsFavorite {
+			return p.filtered[i].IsFavorite
+		}
+		return p.filtered[i].CreatedAt.After(p.filtered[j].CreatedAt)
+	})
+	sort.Slice(p.allClips, func(i, j int) bool {
+		if p.allClips[i].IsFavorite != p.allClips[j].IsFavorite {
+			return p.allClips[i].IsFavorite
+		}
+		return p.allClips[i].CreatedAt.After(p.allClips[j].CreatedAt)
+	})
+
+	p.refreshList()
+	p.updateCountLabel()
 }
 
 // confirmDelete shows a confirmation dialog before deleting.
@@ -482,11 +546,6 @@ func (p *PopupWindow) deleteClip(clipID int64, idx int) {
 // Keyboard handling
 // ─────────────────────────────────────────────────────────────────────────────
 
-// handleKey processes global key events for the popup window.
-//
-//	Esc    → hide popup
-//	Enter  → paste selected clip
-//	↑ / ↓  → move list selection
 func (p *PopupWindow) handleKey(ev *fyne.KeyEvent) {
 	switch ev.Name {
 	case fyne.KeyEscape:
@@ -496,19 +555,13 @@ func (p *PopupWindow) handleKey(ev *fyne.KeyEvent) {
 		if len(p.filtered) == 0 {
 			return
 		}
-		// Use the currently selected item, defaulting to index 0.
 		idx := 0
-		// Fyne's List doesn't expose the selected index directly in all
-		// versions; we use OnSelected wiring and track it separately if needed.
-		// For now, Enter on the search entry pastes the top result.
 		p.pasteClip(p.filtered[idx])
 
 	case fyne.KeyUp:
-		// Move list selection up — delegate to the list widget.
 		p.clipList.ScrollToTop()
 
 	case fyne.KeyDown:
-		// Shift focus to list for arrow navigation.
 		p.win.Canvas().Focus(p.clipList)
 	}
 }
@@ -517,16 +570,14 @@ func (p *PopupWindow) handleKey(ev *fyne.KeyEvent) {
 // UI state helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-// refreshList updates the list widget after the underlying slice changes.
 func (p *PopupWindow) refreshList() {
-    p.clipList.UnselectAll()
-    p.clipList.Refresh()
-    if len(p.filtered) > 0 {
-        p.clipList.ScrollToTop()
-    }
+	p.clipList.UnselectAll()
+	p.clipList.Refresh()
+	if len(p.filtered) > 0 {
+		p.clipList.ScrollToTop()
+	}
 }
 
-// setStatus shows or hides the status label (loading / empty state).
 func (p *PopupWindow) setStatus(msg string) {
 	p.statusLabel.SetText(msg)
 	if msg == "" {
@@ -536,9 +587,6 @@ func (p *PopupWindow) setStatus(msg string) {
 	}
 }
 
-// updateCountLabel refreshes the footer count string.
-//
-//	"1,247 clips · 3 favorites"
 func (p *PopupWindow) updateCountLabel() {
 	total := len(p.allClips)
 	favs := 0
@@ -560,16 +608,9 @@ func (p *PopupWindow) updateCountLabel() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Pure helpers (no Fyne dependency)
+// Pure helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-// relativeTime converts an absolute time to a human-friendly relative string.
-//
-//	< 1 minute ago  → "just now"
-//	< 1 hour ago    → "5 minutes ago"
-//	< 24 hours ago  → "3 hours ago"
-//	< 7 days ago    → "2 days ago"
-//	otherwise       → "Jan 2"
 func relativeTime(t time.Time) string {
 	diff := time.Since(t)
 	switch {
@@ -598,7 +639,6 @@ func relativeTime(t time.Time) string {
 	}
 }
 
-// formatInt adds thousands separators to an integer.
 func formatInt(n int) string {
 	s := fmt.Sprintf("%d", n)
 	if len(s) <= 3 {
@@ -617,7 +657,6 @@ func formatInt(n int) string {
 	return string(result)
 }
 
-// removeByID returns a new slice with the clip matching id removed.
 func removeByID(clips []domain.Clip, id int64) []domain.Clip {
 	out := make([]domain.Clip, 0, len(clips))
 	for _, c := range clips {
@@ -627,6 +666,3 @@ func removeByID(clips []domain.Clip, id int64) []domain.Clip {
 	}
 	return out
 }
-
-// Ensure unused imports are referenced (canvas is used for separators
-// in potential future extensions; kept for the build).
