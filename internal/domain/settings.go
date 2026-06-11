@@ -58,6 +58,9 @@ const (
 	// Minimum: 100 ms. Default: 500 ms.
 	// Lower values are more responsive but use more CPU.
 	KeyPollIntervalMs = "poll_interval_ms"
+
+
+	KeyAutoPaste = "auto_paste"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -72,12 +75,13 @@ const (
 // DefaultSettings maps every known setting key to its default value.
 // The map is read-only at runtime — never modify it.
 var DefaultSettings = map[string]string{
-	KeyHotkey:         "ctrl+shift+v",
+	KeyHotkey:         "ctrl+shift+z",
 	KeyMaxHistory:     "5000",
 	KeyTheme:          "dark",
 	KeyStartOnBoot:    "false",
 	KeyDatabasePath:   "",
 	KeyPollIntervalMs: "500",
+	KeyAutoPaste: "false",
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,6 +124,11 @@ func ValidateSetting(key, value string) error {
 		return nil // any string is acceptable, including empty
 	case KeyPollIntervalMs:
 		return validatePollInterval(value)
+	case KeyAutoPaste:
+		if value != "true" && value != "false" {
+			return fmt.Errorf("must be true or false")
+		}
+		return nil
 	default:
 		return fmt.Errorf("%w: %q", ErrUnknownKey, key)
 	}
