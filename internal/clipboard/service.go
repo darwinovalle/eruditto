@@ -43,6 +43,8 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"os/exec"
+	"time"
 
 	"github.com/darwinovalle/eruditto/internal/domain"
 	"github.com/darwinovalle/eruditto/internal/history"
@@ -340,16 +342,47 @@ func (s *Service) restoreText(ctx context.Context, clip domain.Clip) error {
 	)
 
 	if err := s.reader.WriteText(clip.Content); err != nil {
-		// If the write failed, the monitor will eventually re-pick-up
-		// the original clipboard state, but the suppression flag is
-		// already set. The next tick will be a no-op; the one after
-		// that resumes normal operation. Acceptable trade-off: a
-		// single skipped tick is invisible; failing to write is not.
 		return fmt.Errorf("clipboard: write text: %w", err)
 	}
 
-	// The caller (UI) typically closes the popup after this returns.
-	// The monitor will skip its next tick because of the flag.
-	_ = ctx // reserved for future use (e.g., post-restore notifications)
+	// Optional auto-paste.
+	if s.isAutoPasteEnabled(ctx) {
+		if err := s.autoPaste(); err != nil {
+			s.log.Warn("auto paste failed", "error", err)
+		}
+	}
+
 	return nil
+}
+
+func (s *Service) isAutoPasteEnabled(ctx context.Context) bool {
+    val, err := s.settings.Get(ctx, domain.KeyAutoPaste)
+    if err != nil {
+        return false
+    }
+
+    return val == "true"
+}
+
+// IsAutoPasteEnabled returns the user's Auto Paste setting.
+func (s *Service) IsAutoPasteEnabled(ctx context.Context) bool {
+    return s.isAutoPasteEnabled(ctx)
+}
+
+func (s *Service) autoPaste() error {
+    // Small delay to ensure clipboard ownership has propagated.
+    time.Sleep(50 * time.Millisecond)
+
+    cmd := exec.Command(
+        "xdotool",
+        "key",
+        "--clearmodifiers",
+        "ctrl+v",
+    )
+
+    if err := cmd.Run(); err != nil {
+        return fmt.Errorf("xdotool paste: %w", err)
+    }
+
+    return nil
 }

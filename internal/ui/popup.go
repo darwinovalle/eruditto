@@ -398,7 +398,23 @@ func (p *PopupWindow) pasteClip(clip domain.Clip) {
 		dialog.ShowError(err, p.win)
 		return
 	}
+
 	p.Hide()
+
+	if !p.clipSvc.IsAutoPasteEnabled(ctx) {
+		return
+	}
+
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+
+		if err := AutoPaste(); err != nil {
+			p.app.SendNotification(&fyne.Notification{
+				Title:   "Eruditto",
+				Content: err.Error(),
+			})
+		}
+	}()
 }
 
 // toggleFavorite flips the favorite flag for a clip and refreshes the row.

@@ -98,6 +98,7 @@ type settingsForm struct {
 	bootCheck       *widget.Check
 	pollEntry       *widget.Entry
 	statsLabel      *widget.Label
+	autoPasteCheck *widget.Check
 }
 
 var sf settingsForm
@@ -148,6 +149,10 @@ func (s *SettingsWindow) buildWindow() {
 	sf.themeSelect = widget.NewSelect([]string{"dark", "light", "system"}, nil)
 
 	sf.bootCheck = widget.NewCheck("Launch Eruditto at login", nil)
+	sf.autoPasteCheck = widget.NewCheck(
+		"Paste immediately after selecting a clip",
+		nil,
+	)
 
 	sf.pollEntry = widget.NewEntry()
 	sf.pollEntry.SetPlaceHolder("100")
@@ -194,6 +199,18 @@ func (s *SettingsWindow) buildWindow() {
 		)),
 		widget.NewFormItem("Theme", sf.themeSelect),
 		widget.NewFormItem("Start on boot", sf.bootCheck),
+		widget.NewFormItem(
+			"Auto paste",
+			container.NewVBox(
+				sf.autoPasteCheck,
+				widget.NewLabelWithStyle(
+					"When enabled, selecting a clip automatically pastes it "+
+						"into the previously focused application.",
+					fyne.TextAlignLeading,
+					fyne.TextStyle{Italic: true},
+				),
+			),
+		),
 		widget.NewFormItem("Poll interval (ms)", container.NewVBox(
 			sf.pollEntry,
 			widget.NewLabelWithStyle(
@@ -243,6 +260,7 @@ func (s *SettingsWindow) loadValues() {
 	sf.themeSelect.SetSelected(all[domain.KeyTheme])
 	sf.bootCheck.SetChecked(all[domain.KeyStartOnBoot] == "true")
 	sf.pollEntry.SetText(all[domain.KeyPollIntervalMs])
+	sf.autoPasteCheck.SetChecked(all[domain.KeyAutoPaste] == "true")
 
 	go s.loadStats()
 }
@@ -259,6 +277,10 @@ func (s *SettingsWindow) save() {
 		bootStr = "true"
 	}
 	pollMs := strings.TrimSpace(sf.pollEntry.Text)
+	autoPaste := "false"
+	if sf.autoPasteCheck.Checked {
+		autoPaste = "true"
+	}
 
 	// Validate all fields before touching the database.
 	type field struct{ key, val string }
@@ -268,6 +290,7 @@ func (s *SettingsWindow) save() {
 		{domain.KeyTheme, selectedTheme},
 		{domain.KeyStartOnBoot, bootStr},
 		{domain.KeyPollIntervalMs, pollMs},
+		{domain.KeyAutoPaste, autoPaste},
 	}
 
 	for _, f := range fields {

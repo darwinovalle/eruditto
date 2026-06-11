@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/darwinovalle/eruditto/internal/database"
@@ -300,4 +301,13 @@ func (s *Service) GetMaxHistory(ctx context.Context) int {
 		return 5000
 	}
 	return n
+}
+
+func (s *Service) GetAutoPaste(ctx context.Context) bool {
+    value, err := s.Get(ctx, domain.KeyAutoPaste)
+    if err != nil {
+        return false
+    }
+
+    return strings.EqualFold(value, "true")
 }
