@@ -22,12 +22,6 @@ import (
 )
 
 // SettingsWindow is the preferences editor.
-//
-// It reads current values from the settings service on every Show()
-// call, validates changes inline, and persists on Save.
-//
-// The hotkey field is special: on Save it calls the hotkey manager to
-// unregister the old shortcut and register the new one.
 type SettingsWindow struct {
 	app             fyne.App
 	win             fyne.Window
@@ -35,16 +29,10 @@ type SettingsWindow struct {
 	hotkeyMgr       hotkeys.HotkeyManager
 	repo            *history.Repository
 	dataDir         string
-
-	// onHotkeyChanged is called when the user saves a new hotkey.
-	// main.go injects this so SettingsWindow never needs to know
-	// about the popup handler directly.
 	onHotkeyChanged func(newShortcut hotkeys.Shortcut) error
-
-	built bool
+	built           bool
 }
 
-// NewSettingsWindow constructs the settings window. Hidden until Show().
 func NewSettingsWindow(
 	app fyne.App,
 	settingsSvc *settings.Service,
@@ -69,7 +57,6 @@ func NewSettingsWindow(
 	}
 }
 
-// Show opens the settings window. Safe to call from any goroutine.
 func (s *SettingsWindow) Show() {
 	if !s.built {
 		s.buildWindow()
@@ -79,7 +66,6 @@ func (s *SettingsWindow) Show() {
 	s.win.RequestFocus()
 }
 
-// Hide closes the settings window without saving.
 func (s *SettingsWindow) Hide() {
 	if s.win != nil {
 		s.win.Hide()
@@ -87,7 +73,7 @@ func (s *SettingsWindow) Hide() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Window construction
+// Window construction — Clean, modern form layout
 // ─────────────────────────────────────────────────────────────────────────────
 
 type settingsForm struct {
@@ -98,20 +84,20 @@ type settingsForm struct {
 	bootCheck       *widget.Check
 	pollEntry       *widget.Entry
 	statsLabel      *widget.Label
-	autoPasteCheck *widget.Check
+	autoPasteCheck  *widget.Check
 }
 
 var sf settingsForm
 
 func (s *SettingsWindow) buildWindow() {
-	s.win = s.app.NewWindow("Eruditto — Settings")
-	s.win.Resize(fyne.NewSize(500, 600))
+	s.win = s.app.NewWindow("Settings")
+	s.win.Resize(fyne.NewSize(480, 520))
 	s.win.CenterOnScreen()
 	s.win.SetFixedSize(true)
 
 	// ── Hotkey field ──────────────────────────────────────────────────
 	sf.hotkeyEntry = widget.NewEntry()
-	sf.hotkeyEntry.SetPlaceHolder("e.g. ctrl+shift+v")
+	sf.hotkeyEntry.SetPlaceHolder("ctrl+shift+v")
 	sf.hotkeyErrLabel = widget.NewLabelWithStyle(
 		"", fyne.TextAlignLeading, fyne.TextStyle{},
 	)
@@ -132,7 +118,6 @@ func (s *SettingsWindow) buildWindow() {
 	}
 
 	hotkeySection := container.NewVBox(
-		widget.NewLabel("Global shortcut"),
 		sf.hotkeyEntry,
 		sf.hotkeyErrLabel,
 		widget.NewLabelWithStyle(
@@ -149,6 +134,7 @@ func (s *SettingsWindow) buildWindow() {
 	sf.themeSelect = widget.NewSelect([]string{"dark", "light", "system"}, nil)
 
 	sf.bootCheck = widget.NewCheck("Launch Eruditto at login", nil)
+
 	sf.autoPasteCheck = widget.NewCheck(
 		"Paste immediately after selecting a clip",
 		nil,
@@ -176,18 +162,19 @@ func (s *SettingsWindow) buildWindow() {
 			s.win,
 		)
 	})
-	clearBtn.Importance = widget.DangerImportance
+	clearBtn.Importance = widget.LowImportance
 
 	openDataDirBtn := widget.NewButton("Open data directory", func() {
 		s.openDataDir()
 	})
+	openDataDirBtn.Importance = widget.LowImportance
 
 	// ── Action buttons ────────────────────────────────────────────────
 	cancelBtn := widget.NewButton("Cancel", func() { s.Hide() })
 	saveBtn := widget.NewButton("Save", func() { s.save() })
 	saveBtn.Importance = widget.HighImportance
 
-	// ── Form layout ───────────────────────────────────────────────────
+	// ── Form layout — Clean aligned labels like mockup ─────────────────
 	form := widget.NewForm(
 		widget.NewFormItem("Shortcut", hotkeySection),
 		widget.NewFormItem("Max history", container.NewVBox(
@@ -214,12 +201,13 @@ func (s *SettingsWindow) buildWindow() {
 		widget.NewFormItem("Poll interval (ms)", container.NewVBox(
 			sf.pollEntry,
 			widget.NewLabelWithStyle(
-				"How often the clipboard is checked. Minimum: 100 ms.",
+				"How often the clipboard is checked. Minimum is 100 ms.",
 				fyne.TextAlignLeading, fyne.TextStyle{Italic: true},
 			),
 		)),
 	)
 
+	// History section
 	statsSection := container.NewVBox(
 		widget.NewSeparator(),
 		widget.NewLabelWithStyle(
@@ -257,7 +245,15 @@ func (s *SettingsWindow) loadValues() {
 
 	sf.hotkeyEntry.SetText(all[domain.KeyHotkey])
 	sf.maxHistoryEntry.SetText(all[domain.KeyMaxHistory])
-	sf.themeSelect.SetSelected(all[domain.KeyTheme])
+	
+	// Normalize theme value
+	themeVal := strings.ToLower(all[domain.KeyTheme])
+	if themeVal == "" {
+		themeVal = "dark"
+	}
+	sf.themeSelect.SetSelected(themeVal)
+	currentTheme = themeVal // update global
+	
 	sf.bootCheck.SetChecked(all[domain.KeyStartOnBoot] == "true")
 	sf.pollEntry.SetText(all[domain.KeyPollIntervalMs])
 	sf.autoPasteCheck.SetChecked(all[domain.KeyAutoPaste] == "true")
@@ -282,7 +278,6 @@ func (s *SettingsWindow) save() {
 		autoPaste = "true"
 	}
 
-	// Validate all fields before touching the database.
 	type field struct{ key, val string }
 	fields := []field{
 		{domain.KeyHotkey, hotkeyStr},
@@ -303,7 +298,6 @@ func (s *SettingsWindow) save() {
 		}
 	}
 
-	// Persist all fields.
 	for _, f := range fields {
 		if err := s.settingsSvc.Set(ctx, f.key, f.val); err != nil {
 			dialog.ShowError(err, s.win)
@@ -311,11 +305,15 @@ func (s *SettingsWindow) save() {
 		}
 	}
 
-	// Re-register hotkey if it changed.
+	// Update current theme and notify
+	currentTheme = strings.ToLower(selectedTheme)
+	if onThemeChanged != nil {
+		onThemeChanged(currentTheme)
+	}
+
 	if s.onHotkeyChanged != nil {
 		oldStr, _ := s.settingsSvc.Get(ctx, domain.KeyHotkey)
 		if oldStr != hotkeyStr {
-			// Parse the new shortcut string into a typed Shortcut.
 			newShortcut, err := hotkeys.ParseShortcut(hotkeyStr)
 			if err != nil {
 				dialog.ShowError(
@@ -331,7 +329,6 @@ func (s *SettingsWindow) save() {
 						"Other settings were saved.", hotkeyStr, err),
 					s.win,
 				)
-				// Do not return — other settings were already saved.
 			}
 		}
 	}
