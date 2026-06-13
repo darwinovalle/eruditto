@@ -245,7 +245,15 @@ func (s *SettingsWindow) loadValues() {
 
 	sf.hotkeyEntry.SetText(all[domain.KeyHotkey])
 	sf.maxHistoryEntry.SetText(all[domain.KeyMaxHistory])
-	sf.themeSelect.SetSelected(all[domain.KeyTheme])
+	
+	// Normalize theme value
+	themeVal := strings.ToLower(all[domain.KeyTheme])
+	if themeVal == "" {
+		themeVal = "dark"
+	}
+	sf.themeSelect.SetSelected(themeVal)
+	currentTheme = themeVal // update global
+	
 	sf.bootCheck.SetChecked(all[domain.KeyStartOnBoot] == "true")
 	sf.pollEntry.SetText(all[domain.KeyPollIntervalMs])
 	sf.autoPasteCheck.SetChecked(all[domain.KeyAutoPaste] == "true")
@@ -295,6 +303,12 @@ func (s *SettingsWindow) save() {
 			dialog.ShowError(err, s.win)
 			return
 		}
+	}
+
+	// Update current theme and notify
+	currentTheme = strings.ToLower(selectedTheme)
+	if onThemeChanged != nil {
+		onThemeChanged(currentTheme)
 	}
 
 	if s.onHotkeyChanged != nil {

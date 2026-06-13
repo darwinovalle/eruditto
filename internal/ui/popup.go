@@ -40,8 +40,11 @@ const popupPageSize = 200
 // previewMaxRunes is the character limit for the text preview in each row.
 const previewMaxRunes = 15
 
-// pinBlue is the soft dark blue background for pinned rows.
-var pinBlue = color.RGBA{45, 85, 135, 255} // #2d8187
+// popupWidth is the fixed width of the popup window.
+const popupWidth = 300
+
+// popupHeight is the fixed height of the popup window.
+const popupHeight = 400
 
 // PopupWindow is the clipboard history picker.
 type PopupWindow struct {
@@ -151,8 +154,7 @@ func (p *PopupWindow) Hide() {
 
 func (p *PopupWindow) build() {
 	p.win = p.app.NewWindow("Eruditto")
-	p.win.Resize(fyne.NewSize(200, 300))
-	// p.win.CenterOnScreen()
+	p.win.Resize(fyne.NewSize(popupWidth, popupHeight))
 	p.win.SetFixedSize(true)
 
 	// Close on focus loss
@@ -179,7 +181,7 @@ func (p *PopupWindow) build() {
 	p.statusLabel = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
 
 	hint := widget.NewLabelWithStyle(
-		"↵ paste · esc close · ★ pin",
+		" esc close",
 		fyne.TextAlignTrailing,
 		fyne.TextStyle{Monospace: true},
 	)
@@ -200,7 +202,11 @@ func (p *PopupWindow) build() {
 		p.clipList,
 	)
 
-	p.win.SetContent(content)
+	// Wrap content in a fixed-size container to prevent any child from
+	// expanding the window beyond our desired dimensions.
+	fixedContent := container.NewGridWrap(fyne.NewSize(popupWidth, popupHeight), content)
+
+	p.win.SetContent(fixedContent)
 	p.built = true
 }
 
@@ -208,8 +214,8 @@ func (p *PopupWindow) build() {
 // Custom pin icon resource (pushpin SVG)
 // ─────────────────────────────────────────────────────────────────────────────
 
-var pinIconOutlined = fyne.NewStaticResource("pin_outlined.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-pin-icon lucide-pin"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>`))
-var pinIconFilled = fyne.NewStaticResource("pin_filled.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-pin-off-icon lucide-pin-off"><path d="M12 17v5"/><path d="M15 9.34V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H7.89"/><path d="m2 2 20 20"/><path d="M9 9v1.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h11"/></svg>`))
+var pinIconOutlined = fyne.NewStaticResource("pin_outlined.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15"viewBox="0 0 24 24" fill="none" stroke="#8b8b8b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-pin-icon lucide-pin"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>`))
+var pinIconFilled = fyne.NewStaticResource("pin_filled.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8b8b8b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-pin-off-icon lucide-pin-off"><path d="M12 17v5"/><path d="M15 9.34V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H7.89"/><path d="m2 2 20 20"/><path d="M9 9v1.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h11"/></svg>`))
 
 // pinIcon returns the appropriate pin icon based on pinned state.
 func pinIcon(pinned bool) fyne.Resource {
@@ -349,11 +355,11 @@ func (p *PopupWindow) updateRow(id widget.ListItemID, obj fyne.CanvasObject) {
 	row.pinBtn.OnTapped = func() { p.toggleFavorite(clipID, int(clipIdx)) }
 	row.deleteBtn.OnTapped = func() { p.confirmDelete(clipID, int(clipIdx)) }
 
-	// Background: dark blue when pinned, transparent when not
+	// Background: cyan when pinned (from theme), transparent when not
 	if clip.IsFavorite {
-		row.bgRect.FillColor = pinBlue
+		row.bgRect.FillColor = theme.Color(theme.ColorNamePrimary)
 	} else {
-		row.bgRect.FillColor = nil
+		row.bgRect.FillColor = color.Transparent
 	}
 	row.bgRect.Refresh()
 }
@@ -599,9 +605,8 @@ func (p *PopupWindow) updateCountLabel() {
 	switch {
 	case total == 0:
 		p.countLabel.SetText("No clips")
-	case favs == 0:
-		p.countLabel.SetText(fmt.Sprintf("%s clips", formatInt(total)))
 	default:
+		// Always show pinned count so footer width never changes
 		p.countLabel.SetText(fmt.Sprintf("%s clips · %s pinned",
 			formatInt(total), formatInt(favs)))
 	}

@@ -149,6 +149,20 @@ func main() {
 	// the tray's OnShowPopup callback references the popup window.
 	fyneApp := app.NewWithID(appID)
 
+	// Set up custom theme that responds to dark/light/system settings.
+	// Read initial theme from database before applying.
+	ctxTheme, cancelTheme := context.WithTimeout(rootCtx, 2*time.Second)
+	themeSetting, _ := settingsSvc.Get(ctxTheme, domain.KeyTheme)
+	cancelTheme()
+	if themeSetting == "" {
+		themeSetting = "dark"
+	}
+	ui.SetCurrentTheme(themeSetting)
+	fyneApp.Settings().SetTheme(ui.NewErudittoTheme(ui.GetCurrentTheme))
+	ui.SetThemeChangedCallback(func(mode string) {
+		fyneApp.Settings().SetTheme(ui.NewErudittoTheme(ui.GetCurrentTheme))
+	})
+
 	// ── 11. UI windows ────────────────────────────────────────────────
 	popupWin := ui.NewPopupWindow(fyneApp, clipSvc, historyRepo)
 
