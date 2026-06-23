@@ -123,7 +123,9 @@ func main() {
 		log.Error("failed to initialize image storage", "error", err)
 		os.Exit(1)
 	}
-	_ = imgStorage // used by clipboard service in Phase 7 restore path
+	// imgStorage is consumed by the clipboard service below.
+	// The service uses it to persist clipboard images to disk and
+	// to read them back when restoring via the popup.
 
 	historyRepo := history.New(db, log)
 	clipReader := clipboard.NewAtottoReader()
@@ -137,7 +139,7 @@ func main() {
 	defer cancelRoot() // safety net — also cancelled explicitly in OnQuit
 
 	// ── 8. Clipboard service ──────────────────────────────────────────
-	clipSvc := clipboard.NewService(clipReader, historyRepo, settingsSvc, log)
+	clipSvc := clipboard.NewService(clipReader, historyRepo, imgStorage, settingsSvc, log)
 
 	// ── 9. Hotkey manager ─────────────────────────────────────────────
 	hotkeyMgr := hotkeys.New(log)
@@ -234,6 +236,11 @@ func main() {
 			if err := db.Close(); err != nil {
 				log.Warn("database close error", "error", err)
 			}
+
+			// Note: the image clipboard owner goroutine (held by
+			// golang.design/x/clipboard inside clipSvc.imgWriter)
+			// is released by clipSvc.Stop() above, which is why
+			// no explicit clipboard teardown is needed here.
 
 			// Step 5: remove the IPC socket so the next launch
 			// doesn't see a stale socket.

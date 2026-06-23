@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -64,6 +65,17 @@ type PopupWindow struct {
 	clipChanged chan struct{}
 
 	built bool
+
+	// previousWindowID is the X11 window ID of the application
+	// that had focus immediately before the popup opened. We
+	// capture it in Show() and restore it explicitly before
+	// sending the auto-paste keypress in pasteClip().
+	//
+	// Without this, the window manager may take a variable
+	// amount of time (or fail entirely on some compositors) to
+	// return focus to the previously-focused window after the
+	// popup hides, and the auto-paste ctrl+v is swallowed.
+	previousWindowID string
 
 	// rowCache maps list row containers to their metadata.
 	rowCache map[fyne.CanvasObject]*clipRow
@@ -129,6 +141,16 @@ func (p *PopupWindow) currentQuery() string {
 // Show opens the popup and reloads clips fresh from the DB.
 // Positions the window near the mouse cursor on the active screen.
 func (p *PopupWindow) Show() {
+	// Capture the currently-focused X11 window BEFORE the popup
+	// steals focus. We use this ID later in pasteClip to explicitly
+	// reactivate the previous window before sending ctrl+v for
+	// auto-paste. We do not block on the call: if xdotool fails
+	// (no display server, no focused window), we leave the field
+	// empty and pasteClip falls back to the time-based sleep.
+	if id, err := clipboard.CaptureActiveWindowID(); err == nil {
+		p.previousWindowID = id
+	}
+
 	fyne.Do(func() {
 		if !p.built {
 			p.build()
@@ -459,10 +481,53 @@ func (p *PopupWindow) pasteClip(clip domain.Clip) {
 		return
 	}
 
-	go func() {
-		time.Sleep(150 * time.Millisecond)
+	slog.Debug("pasteClip: auto-paste path entered",
+		"clip_type", clip.Type.String(),
+		"clip_id", clip.ID,
+		"previous_window_id", p.previousWindowID,
+	)
 
-		if err := AutoPaste(); err != nil {
+	go func() {
+		// Explicitly reactivate the window that had focus before
+		// the popup opened. windowactivate --sync blocks until the
+		// window manager confirms the focus change, so by the time
+		// it returns, the target window is guaranteed to be the
+		// active one. The 50ms sleep is a small extra cushion for
+		// the WM to finish any compositor-side transitions.
+		//
+		// If we failed to capture the window ID at Show() time
+		// (empty previousWindowID), fall back to a longer sleep so
+		// the popup's Hide() has time to release focus on its own.
+		if p.previousWindowID != "" {
+			slog.Debug("pasteClip: activating previous window",
+				"window_id", p.previousWindowID,
+			)
+			if err := clipboard.ActivateWindow(p.previousWindowID); err != nil {
+				slog.Warn("pasteClip: activate previous window failed",
+					"window_id", p.previousWindowID,
+					"error", err,
+				)
+				p.app.SendNotification(&fyne.Notification{
+					Title:   "Eruditto",
+					Content: "auto-paste: could not reactivate previous window: " + err.Error(),
+				})
+				time.Sleep(150 * time.Millisecond)
+			} else {
+				slog.Debug("pasteClip: previous window activated, sleeping 50ms")
+				time.Sleep(50 * time.Millisecond)
+			}
+		} else {
+			slog.Warn("pasteClip: previous window id empty, falling back to 150ms sleep")
+			time.Sleep(150 * time.Millisecond)
+		}
+
+		slog.Debug("pasteClip: sending paste shortcut",
+			"target_window_id", p.previousWindowID,
+			"clip_type", clip.Type.String(),
+		)
+		isImage := clip.Type == domain.ClipTypeImage
+		if err := AutoPaste(p.previousWindowID, isImage); err != nil {
+			slog.Warn("pasteClip: AutoPaste failed", "error", err)
 			p.app.SendNotification(&fyne.Notification{
 				Title:   "Eruditto",
 				Content: err.Error(),

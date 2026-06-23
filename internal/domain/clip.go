@@ -115,6 +115,26 @@ func NewImageClip(imagePath, hash string) Clip {
 //
 // The returned error wraps one of the sentinel errors declared
 // in this package; callers can match with errors.Is.
+//
+// Image clip state machine:
+//
+//	Tentative insert  (Type=image, ImagePath="")  — VALID.
+//	  The service inserts with empty path so the DB assigns an id,
+//	  then saves bytes to disk and updates the row with the real path.
+//
+//	Persisted record  (Type=image, ImagePath!="") — VALID.
+//	  The final state after UpdateImagePath runs.
+//
+//	Garbage state     (Type=image, Content!="")  — INVALID.
+//	  Image clips should never carry Content; the data is in the file.
+//
+// Text clip rules are unchanged: Content must be non-empty.
+//
+// The cross-cutting "neither content nor image_path" check at the
+// bottom deliberately allows (Type=image, Content="", ImagePath="")
+// because that is the tentative-insert state. If Validate ever
+// sees that combination from anywhere other than the service's
+// persistImageClip, treat it as a programmer error.
 func (c *Clip) Validate() error {
 	if c == nil {
 		return ErrInvalidType
@@ -135,15 +155,22 @@ func (c *Clip) Validate() error {
 			return ErrEmptyContent
 		}
 	case ClipTypeImage:
-		if c.ImagePath == "" {
-			return ErrEmptyImagePath
+		// Image clips should never carry Content.
+		if c.Content != "" {
+			return fmt.Errorf(
+				"%w: image clip must not have Content",
+				ErrInvalidType,
+			)
 		}
+		// Note: we do NOT reject empty ImagePath here. The service
+		// inserts image rows with empty path as a deliberate two-step
+		// flow; Validate must permit that intermediate state.
 	}
-	// Defensive: a clip with neither content nor image_path is
-	// a programming error. It cannot happen via the constructors
-	// above, but if someone builds a Clip{} literal we still
-	// catch it here.
-	if c.Content == "" && c.ImagePath == "" {
+	// Defensive: a TEXT clip with neither content nor image_path is
+	// invalid. For image clips, the empty-path case is the valid
+	// tentative-insert state (handled above), so we skip the check
+	// when Type == image.
+	if c.Type == ClipTypeText && c.Content == "" && c.ImagePath == "" {
 		return ErrNoContent
 	}
 	return nil

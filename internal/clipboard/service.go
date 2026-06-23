@@ -43,11 +43,10 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"os/exec"
-	"time"
 
 	"github.com/darwinovalle/eruditto/internal/domain"
 	"github.com/darwinovalle/eruditto/internal/history"
+	"github.com/darwinovalle/eruditto/internal/images"
 	"github.com/darwinovalle/eruditto/internal/settings"
 )
 
@@ -66,13 +65,14 @@ const eventsBufferSize = 16
 // monitoring and Stop to shut down cleanly. Events() exposes the
 // channel that UI code subscribes to.
 type Service struct {
-	monitor   *Monitor
-	reader    Reader
-	repo      *history.Repository
-	settings  *settings.Service
-	log       *slog.Logger
+	monitor  *Monitor
+	reader   Reader
+	repo     *history.Repository
+	images   *images.Storage
+	settings *settings.Service
+	log      *slog.Logger
 
-	events    chan Event
+	events chan Event
 
 	subscribersMu sync.Mutex
 	subscribers   []chan struct{}
@@ -91,7 +91,7 @@ type Service struct {
 	// Service. Without it, a caller that immediately calls
 	// repo.Close() after Stop could race with a still-running
 	// consumer that holds a *sql.DB.
-	done      chan struct{}
+	done chan struct{}
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -99,14 +99,17 @@ type Service struct {
 
 // NewService constructs a Service. All dependencies are required.
 //
-// repo is the clip persistence layer. settings is consulted for the
-// polling interval. log is the structured logger.
+// repo is the clip persistence layer. images is the on-disk image
+// storage (used to save clipboard images and to read them back when
+// restoring). settings is consulted for the polling interval. log is
+// the structured logger.
 //
 // The Service does not start the monitor until Start is called.
 // Construction is cheap and side-effect-free.
 func NewService(
 	reader Reader,
 	repo *history.Repository,
+	imagesStore *images.Storage,
 	settings *settings.Service,
 	log *slog.Logger,
 ) *Service {
@@ -115,6 +118,9 @@ func NewService(
 	}
 	if repo == nil {
 		panic("clipboard: service requires a non-nil repository")
+	}
+	if imagesStore == nil {
+		panic("clipboard: service requires a non-nil images storage")
 	}
 	if settings == nil {
 		panic("clipboard: service requires a non-nil settings service")
@@ -126,6 +132,7 @@ func NewService(
 	return &Service{
 		reader:   reader,
 		repo:     repo,
+		images:   imagesStore,
 		settings: settings,
 		log:      log,
 		events:   make(chan Event, eventsBufferSize),
@@ -200,6 +207,10 @@ func (s *Service) Start(ctx context.Context) {
 //
 // Stop closes the events channel so subscribers see a clean
 // termination.
+//
+// Stop also releases X11 clipboard ownership held by the
+// image writer, so the selection owner goroutine inside
+// golang.design/x/clipboard exits and does not outlive the app.
 func (s *Service) Stop() {
 	s.stopOnce.Do(func() {
 		if s.runCancel != nil {
@@ -212,6 +223,10 @@ func (s *Service) Stop() {
 		// no producer is still writing.
 		close(s.events)
 
+		// Release any long-lived clipboard resources held by the
+		// reader (e.g., the xclip -loops 0 daemon for images).
+		s.reader.Stop()
+
 		s.log.Info("clipboard service stopped")
 	})
 }
@@ -219,14 +234,12 @@ func (s *Service) Stop() {
 // consume is the service's consumer goroutine. It reads events from
 // the monitor (via s.events) and reacts:
 //
-//   - EventOpNewClip: build a domain.Clip, call repo.Insert, log.
-//   - EventOpError:   log at warn level; the monitor has already
-//                     logged the same error so this is a courtesy
-//                     for anyone subscribed to events.
-//
-// Image clip support is intentionally not implemented here. If
-// Phase 5 ever produces an image clip (it should not — the monitor
-// only watches text), we log and skip.
+//   - EventOpNewClip (text):  repo.Insert, notify, enforce max history.
+//   - EventOpNewClip (image): save bytes to disk, Insert, set
+//     image_path, notify, enforce max history.
+//   - EventOpError:           log at warn level; the monitor has
+//     already logged the same error so this is a courtesy for
+//     anyone subscribed to events.
 func (s *Service) consume(ctx context.Context) {
 	defer close(s.done)
 
@@ -244,7 +257,7 @@ func (s *Service) consume(ctx context.Context) {
 
 			switch e.Op {
 			case EventOpNewClip:
-				s.persistClip(ctx, e.Clip)
+				s.persistClip(ctx, e)
 
 			case EventOpError:
 				// Monitor already logged. Re-log here only if we
@@ -258,37 +271,52 @@ func (s *Service) consume(ctx context.Context) {
 
 // persistClip inserts a clip into the history repository.
 //
-// The clip from the monitor has ID=0 (the database assigns it).
-// The repo handles dedupe via the hash UNIQUE constraint, so
-// re-pasting the same content is a no-op beyond a single SELECT.
-func (s *Service) persistClip(ctx context.Context, clip domain.Clip) {
-	// Defensive: Phase 5 should not produce image clips. If one
-	// arrives, log and skip rather than persist a half-formed row.
-	if clip.Type != domain.ClipTypeText {
-		s.log.Warn("monitor produced non-text clip; skipping",
-			"type", clip.Type.String(),
-		)
-		return
-	}
+// For text clips the path is straightforward: build a Clip, Insert,
+// notify subscribers, enforce max history.
+//
+// For image clips the path is two-step because the on-disk filename
+// is derived from the DB-assigned id:
+//
+//  1. Insert the clip with an empty image_path — repo.Insert returns id.
+//     Dedupe by hash: if the same image was already captured, Insert
+//     returns the existing id and we do NOT re-save the bytes to disk.
+//  2. Save the bytes to disk via s.images.Save(id, bytes). The returned
+//     path is the full path of the saved file.
+//  3. UPDATE the row to set image_path = savedPath.
+//
+// On any failure between step 1 and step 3 (storage error, decode
+// error, too-large image), the inserted row is rolled back by
+// deleting it so we never leave an "image clip with no file behind
+// it" dangling in history.
+//
+// TODO(cleanup): EnforceMaxHistory currently does not delete the
+// on-disk image when it trims an image row. Files leak. Out of
+// scope for this change.
+func (s *Service) persistClip(ctx context.Context, e Event) {
+	clip := e.Clip
 
-	id, err := s.repo.Insert(ctx, clip)
-	if err != nil {
-		s.log.Error("failed to persist clip",
-			"error", err,
+	switch clip.Type {
+	case domain.ClipTypeText:
+		s.persistTextClip(ctx, clip)
+
+	case domain.ClipTypeImage:
+		if e.ImageBytes == nil {
+			s.log.Error("image event with no bytes; skipping",
+				"hash", clip.Hash,
+			)
+			return
+		}
+		s.persistImageClip(ctx, clip, e.ImageBytes)
+
+	default:
+		s.log.Warn("unknown clip type; skipping",
+			"type", clip.Type.String(),
 			"hash", clip.Hash,
 		)
 		return
 	}
-	s.log.Debug("clip persisted",
-		"id", id,
-		"hash", clip.Hash,
-		"length", len(clip.Content),
-	)
-	s.notifySubscribers()
 
-	// After persisting, enforce the user's history cap. This is
-	// cheap (a single COUNT + maybe a DELETE) and keeps the
-	// database size in check without a separate cron job.
+	// History cap enforcement runs once per clip, regardless of type.
 	maxHistory := s.settings.GetMaxHistory(ctx)
 	if maxHistory > 0 {
 		if _, err := s.repo.EnforceMaxHistory(ctx, maxHistory); err != nil {
@@ -297,21 +325,149 @@ func (s *Service) persistClip(ctx context.Context, clip domain.Clip) {
 	}
 }
 
+// persistTextClip handles the text branch of persistClip.
+func (s *Service) persistTextClip(ctx context.Context, clip domain.Clip) {
+	id, err := s.repo.Insert(ctx, clip)
+	if err != nil {
+		s.log.Error("failed to persist text clip",
+			"error", err,
+			"hash", clip.Hash,
+		)
+		return
+	}
+	s.log.Debug("clip persisted",
+		"id", id,
+		"type", "text",
+		"hash", clip.Hash,
+		"length", len(clip.Content),
+	)
+	s.notifySubscribers()
+}
+
+// persistImageClip handles the image branch of persistClip.
+//
+// Sequence:
+//
+//  1. Insert row with empty image_path → returns id (or existing id
+//     if the hash already exists; in that case we skip the disk save
+//     because the file is already there).
+//  2. Save bytes to disk via images.Storage.Save(id, bytes).
+//     Returns the full file path. May fail with ErrImageTooLarge,
+//     ErrInvalidImage, or a wrapped os error.
+//  3. UPDATE the row to set image_path.
+//
+// Any failure between Insert and UpdateImagePath triggers a
+// compensating delete of the row so the DB does not contain a
+// half-formed image clip.
+func (s *Service) persistImageClip(ctx context.Context, clip domain.Clip, imageBytes []byte) {
+	// Step 1: insert the row. The monitor built this clip with
+	// ImagePath="" because the disk filename is derived from the
+	// DB-assigned id; we cannot know the id until after Insert.
+	// domain.Clip.Validate permits image clips with empty ImagePath
+	// as the explicit "tentative insert" state — see Validate's
+	// doc comment in internal/domain/clip.go.
+	id, err := s.repo.Insert(ctx, clip)
+	if err != nil {
+		s.log.Error("failed to persist image clip row",
+			"error", err,
+			"hash", clip.Hash,
+		)
+		return
+	}
+
+	// Check whether this was a fresh insert or a dedup hit.
+	// GetByID lets us see the current image_path; if non-empty,
+	// the file is already on disk from a previous capture and we
+	// can skip the Save call entirely.
+	existing, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		s.log.Error("failed to read back inserted image clip",
+			"error", err,
+			"id", id,
+		)
+		return
+	}
+	if existing.ImagePath != "" {
+		s.log.Debug("image clip already on disk; skipping save",
+			"id", id,
+			"hash", clip.Hash,
+			"image_path", existing.ImagePath,
+		)
+		s.notifySubscribers()
+		return
+	}
+
+	// Step 2: save the bytes. id > 0 because Insert returns the
+	// existing id on dedup (which we handled above) or a freshly
+	// assigned positive id otherwise.
+	imagePath, err := s.images.Save(id, imageBytes)
+	if err != nil {
+		s.log.Error("failed to save image to disk",
+			"error", err,
+			"id", id,
+			"hash", clip.Hash,
+			"size", len(imageBytes),
+		)
+		// Compensating delete: remove the orphaned DB row so the
+		// history list does not show a clip with no file behind it.
+		if _, delErr := s.repo.Delete(ctx, id); delErr != nil {
+			s.log.Error("failed to roll back orphaned image row",
+				"error", delErr,
+				"id", id,
+			)
+		}
+		return
+	}
+
+	// Step 3: update the row with the real image_path.
+	if err := s.repo.UpdateImagePath(ctx, id, imagePath); err != nil {
+		s.log.Error("failed to update image_path",
+			"error", err,
+			"id", id,
+			"image_path", imagePath,
+		)
+		// Compensating cleanup: delete both the row and the file
+		// we just wrote, otherwise we leave a dangling file with
+		// no DB row pointing at it.
+		if _, delErr := s.repo.Delete(ctx, id); delErr != nil {
+			s.log.Error("failed to roll back orphaned image row",
+				"error", delErr,
+				"id", id,
+			)
+		}
+		if delErr := s.images.Delete(imagePath); delErr != nil {
+			s.log.Error("failed to delete orphaned image file",
+				"error", delErr,
+				"path", imagePath,
+			)
+		}
+		return
+	}
+
+	s.log.Debug("image clip persisted",
+		"id", id,
+		"hash", clip.Hash,
+		"size", len(imageBytes),
+		"image_path", imagePath,
+	)
+	s.notifySubscribers()
+}
+
 // RestoreClip puts the given clip back on the system clipboard.
 //
 // For text clips, this is straightforward: ask the reader to write
 // the clip's content, with a self-write guard so the monitor does
 // not re-publish the same content as a new event.
 //
-// For image clips, this is a Phase 7 feature. We return an explicit
-// error rather than silently no-oping — silent skippage makes
-// debugging "why didn't my paste work?" much harder.
+// For image clips, load the bytes from disk via the images storage
+// and ask the reader to put them on the clipboard as image/png,
+// again under the self-write guard.
 func (s *Service) RestoreClip(ctx context.Context, clip domain.Clip) error {
 	switch clip.Type {
 	case domain.ClipTypeText:
 		return s.restoreText(ctx, clip)
 	case domain.ClipTypeImage:
-		return fmt.Errorf("clipboard: restore image clip: not supported in Phase 5 (image support arrives in Phase 7)")
+		return s.restoreImage(ctx, clip)
 	default:
 		return fmt.Errorf("clipboard: restore: unknown clip type %q", clip.Type.String())
 	}
@@ -345,13 +501,12 @@ func (s *Service) restoreText(ctx context.Context, clip domain.Clip) error {
 		return fmt.Errorf("clipboard: write text: %w", err)
 	}
 
-	// Optional auto-paste.
-	if s.isAutoPasteEnabled(ctx) {
-		if err := s.autoPaste(); err != nil {
-			s.log.Warn("auto paste failed", "error", err)
-		}
-	}
-
+	// Note: auto-paste is intentionally NOT done here. The popup
+	// layer (internal/ui/popup.go pasteClip) is responsible for
+	// auto-paste because it owns the captured previously-focused
+	// window ID and can explicitly reactivate it before sending
+	// ctrl+v. Doing it from the service would race with the popup
+	// closing and the focus not yet having transferred.
 	return nil
 }
 
@@ -370,19 +525,62 @@ func (s *Service) IsAutoPasteEnabled(ctx context.Context) bool {
 }
 
 func (s *Service) autoPaste() error {
-    // Small delay to ensure clipboard ownership has propagated.
-    time.Sleep(50 * time.Millisecond)
+    // Unused. Kept as a reference for tests that may want to call
+    // it directly. The production auto-paste path lives in
+    // internal/ui/popup.go pasteClip, which captures the previously
+    // focused window via xdotool and explicitly reactivates it
+    // before sending ctrl+v. Doing it from the service layer would
+    // require plumbing the captured window ID through, and the
+    // popup already has the right context (Fyne window lifecycle).
+    //
+    // Removed the runtime body so it does not silently do the wrong
+    // thing if it is ever called.
+    return fmt.Errorf("clipboard: service.autoPaste is a no-op; use ui.AutoPaste via popup.pasteClip")
+}
 
-    cmd := exec.Command(
-        "xdotool",
-        "key",
-        "--clearmodifiers",
-        "ctrl+v",
-    )
+// restoreImage is the image branch of RestoreClip.
+//
+// Order of operations:
+//
+//  1. Set the self-write suppression flag BEFORE any side effects.
+//  2. Load the bytes from disk via s.images.Load.
+//  3. Write the bytes to the clipboard via s.reader.WriteImage,
+//     which launches a long-lived xclip daemon (-loops 0). The
+//     daemon owns the X11 CLIPBOARD selection and serves the image
+//     bytes to requesting apps on demand until another app takes
+//     ownership or eruditto exits.
+//
+// If Load fails, the suppression flag has already been consumed by
+// the next monitor tick — this is harmless because the next tick
+// will simply see whatever is on the clipboard (no new content, no
+// event) and resume normal operation. The cost of an "extra" skipped
+// tick is negligible.
+//
+// If WriteImage fails, the same logic applies: the flag is consumed
+// either way. The user sees the error from RestoreClip and can retry.
+func (s *Service) restoreImage(_ context.Context, clip domain.Clip) error {
+	if clip.ImagePath == "" {
+		return fmt.Errorf("clipboard: restore: image clip has empty image_path")
+	}
 
-    if err := cmd.Run(); err != nil {
-        return fmt.Errorf("xdotool paste: %w", err)
-    }
+	s.monitor.SuppressNext()
+	s.log.Debug("restoring image clip",
+		"hash", clip.Hash,
+		"image_path", clip.ImagePath,
+	)
 
-    return nil
+	data, err := s.images.Load(clip.ImagePath)
+	if err != nil {
+		return fmt.Errorf("clipboard: load image %q: %w", clip.ImagePath, err)
+	}
+
+	if err := s.reader.WriteImage(data); err != nil {
+		return fmt.Errorf("clipboard: write image: %w", err)
+	}
+
+	// Optional auto-paste is intentionally NOT done here. The
+	// popup layer (internal/ui/popup.go pasteClip) handles
+	// auto-paste with explicit focus restoration — see restoreText
+	// for the same comment.
+	return nil
 }
