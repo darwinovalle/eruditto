@@ -167,6 +167,10 @@ func main() {
 
 	// ── 11. UI windows ────────────────────────────────────────────────
 	popupWin := ui.NewPopupWindow(fyneApp, clipSvc, historyRepo)
+	// Wire the settings service so the popup can read the
+	// "popup follows mouse" preference and decide between
+	// cursor-near and screen-centred placement when opening.
+	popupWin.SetSettingsService(settingsSvc)
 
 	// registerHotkey parses a shortcut string and registers it with the manager.
 	// Centralises the string→Shortcut conversion so call sites stay clean.

@@ -34,6 +34,7 @@ import (
 	"github.com/darwinovalle/eruditto/internal/domain"
 	"github.com/darwinovalle/eruditto/internal/history"
 	"github.com/darwinovalle/eruditto/internal/hotkeys"
+	"github.com/darwinovalle/eruditto/internal/settings"
 )
 
 // popupPageSize is the number of clips loaded per query.
@@ -54,6 +55,7 @@ type PopupWindow struct {
 	win      fyne.Window
 	clipSvc  *clipboard.Service
 	repo     *history.Repository
+	settingsSvc *settings.Service
 
 	// pasteHotkey holds the global hotkey that opens the popup
 	// (e.g. ctrl+shift+z). pasteClip temporarily unregisters it
@@ -142,6 +144,35 @@ func (p *PopupWindow) SetPasteHotkeyHook(mgr hotkeys.HotkeyManager, sc hotkeys.S
 	p.pasteHotkeyHotkeyMgr = mgr
 	p.pasteHotkeyShortcut = sc
 	p.pasteHotkeyHandler = handler
+}
+
+// SetSettingsService wires the settings service into the popup so
+// showAndPosition can read the user's "popup follows mouse"
+// preference and choose between cursor-near positioning and
+// screen-centered positioning. Optional — when nil, the popup
+// stays in cursor-near mode (the original behaviour).
+func (p *PopupWindow) SetSettingsService(svc *settings.Service) {
+	p.settingsSvc = svc
+}
+
+// readMouseTrackingSetting returns the user's preference for
+// whether the popup follows the mouse cursor. Default is true
+// (follow mouse, the historical behaviour) when the setting
+// can't be read.
+//
+// Called from showAndPosition on the Fyne thread; the lookup
+// is short-lived so it's safe to read synchronously here.
+func (p *PopupWindow) readMouseTrackingSetting() bool {
+	if p.settingsSvc == nil {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	val, err := p.settingsSvc.Get(ctx, domain.KeyPopupMouseTracking)
+	if err != nil {
+		return true
+	}
+	return val == "true"
 }
 
 // NotifyClipChanged signals the popup that clipboard history has changed.

@@ -130,6 +130,59 @@ func positionNearCursor(winWidth, winHeight float32) (int, int) {
 	return wx, wy
 }
 
+// positionCenterScreen centres the popup on the screen that
+// contains the mouse cursor. Used when the user has disabled
+// "popup follows mouse" — the popup still appears on the same
+// screen as the user, but in the middle of it instead of next
+// to the cursor.
+//
+// We deliberately read cursor position via xdotool here rather
+// than from a captured snapshot: the popup wait (Sleep 50ms in
+// showAndPosition) clamps the cursor in place once the window
+// has grabbed focus, so a fresh read at the moment we position
+// is the most faithful snapshot.
+//
+// Falls back to the first screen's centre if xdotool fails.
+func positionCenterScreen(winWidth, winHeight float32) (int, int) {
+	mx, my, err := getMousePosition()
+	screens := getAllScreens()
+
+	if err != nil {
+		s := screens[0]
+		return s[0] + s[2]/2 - int(winWidth)/2,
+			s[1] + s[3]/2 - int(winHeight)/2
+	}
+
+	screen := getScreenForPoint(mx, my)
+	sx, sy, sw, sh := screen[0], screen[1], screen[2], screen[3]
+
+	wx := sx + sw/2 - int(winWidth)/2
+	wy := sy + sh/2 - int(winHeight)/2
+
+	if wx < sx {
+		wx = sx + 5
+	}
+	if wy < sy {
+		wy = sy + 5
+	}
+	// Clamp to screen bounds in case the popup is wider than
+	// the screen on the right edge.
+	if wx+int(winWidth) > sx+sw {
+		wx = sx + sw - int(winWidth) - 5
+		if wx < sx {
+			wx = sx
+		}
+	}
+	if wy+int(winHeight) > sy+sh {
+		wy = sy + sh - int(winHeight) - 5
+		if wy < sy {
+			wy = sy
+		}
+	}
+
+	return wx, wy
+}
+
 // moveWindow moves the active window (the popup) to the given position.
 func moveWindow(x, y int) {
 	exec.Command("xdotool", "getactivewindow", "windowmove", "--",
@@ -137,10 +190,30 @@ func moveWindow(x, y int) {
 }
 
 // showAndPosition shows the window and moves it to the correct position.
+//
+// Two modes, controlled by the
+// domain.KeyPopupMouseTracking setting:
+//
+//   - "true" (default): the popup follows the mouse cursor and
+//     lands a small offset from it on the cursor's screen.
+//   - "false": the popup is centred on the screen that contains
+//     the mouse cursor.
+//
+// In both modes the screen is selected by querying the cursor
+// position, which is a faithful proxy for "which monitor is the
+// user on" given that pressing the global hotkey happens with
+// the keyboard at hand, not next to the cursor.
 func (p *PopupWindow) showAndPosition() {
 	winWidth := float32(200)
 	winHeight := float32(300)
-	x, y := positionNearCursor(winWidth, winHeight)
+
+	followMouse := p.readMouseTrackingSetting()
+	var x, y int
+	if followMouse {
+		x, y = positionNearCursor(winWidth, winHeight)
+	} else {
+		x, y = positionCenterScreen(winWidth, winHeight)
+	}
 
 	p.win.Resize(fyne.NewSize(winWidth, winHeight))
 	p.win.Show()

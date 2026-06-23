@@ -77,14 +77,15 @@ func (s *SettingsWindow) Hide() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 type settingsForm struct {
-	hotkeyEntry     *widget.Entry
-	hotkeyErrLabel  *widget.Label
-	maxHistoryEntry *widget.Entry
-	themeSelect     *widget.Select
-	bootCheck       *widget.Check
-	pollEntry       *widget.Entry
-	statsLabel      *widget.Label
-	autoPasteCheck  *widget.Check
+	hotkeyEntry        *widget.Entry
+	hotkeyErrLabel     *widget.Label
+	maxHistoryEntry    *widget.Entry
+	themeSelect        *widget.Select
+	bootCheck          *widget.Check
+	pollEntry          *widget.Entry
+	statsLabel         *widget.Label
+	autoPasteCheck     *widget.Check
+	mouseTrackingCheck *widget.Check
 }
 
 var sf settingsForm
@@ -137,6 +138,11 @@ func (s *SettingsWindow) buildWindow() {
 
 	sf.autoPasteCheck = widget.NewCheck(
 		"Paste immediately after selecting a clip",
+		nil,
+	)
+
+	sf.mouseTrackingCheck = widget.NewCheck(
+		"Popup follows mouse cursor",
 		nil,
 	)
 
@@ -193,6 +199,20 @@ func (s *SettingsWindow) buildWindow() {
 				widget.NewLabelWithStyle(
 					"When enabled, selecting a clip automatically pastes it "+
 						"into the previously focused application.",
+					fyne.TextAlignLeading,
+					fyne.TextStyle{Italic: true},
+				),
+			),
+		),
+		widget.NewFormItem(
+			"Popup placement",
+			container.NewVBox(
+				sf.mouseTrackingCheck,
+				widget.NewLabelWithStyle(
+					"When enabled, the popup opens next to the mouse cursor. "+
+						"When disabled, the popup opens centred on the screen "+
+						"where the cursor is, useful for multi-monitor setups "+
+						"where you want a predictable location.",
 					fyne.TextAlignLeading,
 					fyne.TextStyle{Italic: true},
 				),
@@ -257,6 +277,7 @@ func (s *SettingsWindow) loadValues() {
 	sf.bootCheck.SetChecked(all[domain.KeyStartOnBoot] == "true")
 	sf.pollEntry.SetText(all[domain.KeyPollIntervalMs])
 	sf.autoPasteCheck.SetChecked(all[domain.KeyAutoPaste] == "true")
+	sf.mouseTrackingCheck.SetChecked(all[domain.KeyPopupMouseTracking] == "true")
 
 	go s.loadStats()
 }
@@ -278,6 +299,11 @@ func (s *SettingsWindow) save() {
 		autoPaste = "true"
 	}
 
+	mouseTracking := "true"
+	if !sf.mouseTrackingCheck.Checked {
+		mouseTracking = "false"
+	}
+
 	type field struct{ key, val string }
 	fields := []field{
 		{domain.KeyHotkey, hotkeyStr},
@@ -286,6 +312,7 @@ func (s *SettingsWindow) save() {
 		{domain.KeyStartOnBoot, bootStr},
 		{domain.KeyPollIntervalMs, pollMs},
 		{domain.KeyAutoPaste, autoPaste},
+		{domain.KeyPopupMouseTracking, mouseTracking},
 	}
 
 	for _, f := range fields {
