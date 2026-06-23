@@ -33,6 +33,7 @@ import (
 	"github.com/darwinovalle/eruditto/internal/clipboard"
 	"github.com/darwinovalle/eruditto/internal/domain"
 	"github.com/darwinovalle/eruditto/internal/history"
+	"github.com/darwinovalle/eruditto/internal/hotkeys"
 )
 
 // popupPageSize is the number of clips loaded per query.
@@ -53,6 +54,22 @@ type PopupWindow struct {
 	win      fyne.Window
 	clipSvc  *clipboard.Service
 	repo     *history.Repository
+
+	// pasteHotkey holds the global hotkey that opens the popup
+	// (e.g. ctrl+shift+z). pasteClip temporarily unregisters it
+	// before sending the synthetic paste keypress so that the
+	// keypress injection does not race against the hotkey grab
+	// and re-open the popup in the middle of the paste. See
+	// pasteClip's doc for details.
+	//
+	// Optional — when nil, no guard is performed (the paste runs
+	// with the hotkey still active). Callers that own a
+	// HotkeyManager should set these fields via the
+	// setPasteHotkey constructor or by direct assignment right
+	// after NewPopupWindow.
+	pasteHotkeyHotkeyMgr hotkeys.HotkeyManager
+	pasteHotkeyShortcut  hotkeys.Shortcut
+	pasteHotkeyHandler   func()
 
 	allClips []domain.Clip
 	filtered []domain.Clip
@@ -103,6 +120,28 @@ func NewPopupWindow(
 		clipChanged: make(chan struct{}, 1),
 		rowCache:    make(map[fyne.CanvasObject]*clipRow),
 	}
+}
+
+// SetPasteHotkeyHook wires the global hotkey that opens the popup
+// into the paste-suppression guard. Calling this makes pasteClip
+// temporarily Unregister the hotkey before sending the synthetic
+// paste keypress, then re-register it 300ms later. This works
+// around an X11 race where synthesised key events from xdotool
+// fire the global hotkey grab and re-open the popup mid-paste.
+//
+// Both mgr and handler are required (mgr=nil, handler=nil
+// disable the guard for backward compatibility, but pasting into
+// terminals/TUIs without calling this may re-fire the popup).
+func (p *PopupWindow) SetPasteHotkeyHook(mgr hotkeys.HotkeyManager, sc hotkeys.Shortcut, handler func()) {
+	if mgr == nil || handler == nil {
+		p.pasteHotkeyHotkeyMgr = nil
+		p.pasteHotkeyShortcut = hotkeys.Shortcut{}
+		p.pasteHotkeyHandler = nil
+		return
+	}
+	p.pasteHotkeyHotkeyMgr = mgr
+	p.pasteHotkeyShortcut = sc
+	p.pasteHotkeyHandler = handler
 }
 
 // NotifyClipChanged signals the popup that clipboard history has changed.
@@ -526,6 +565,50 @@ func (p *PopupWindow) pasteClip(clip domain.Clip) {
 			"clip_type", clip.Type.String(),
 		)
 		isImage := clip.Type == domain.ClipTypeImage
+
+		// Temporarily unregister the global hotkey that opens
+		// this popup while we send the synthetic paste keypress.
+		//
+		// Why: xdotool's synthetic key events have been observed
+		// (and reproduced in production logging) to fire the
+		// global hotkey grab for ctrl+shift+z while the
+		// keypress injection is in flight, which re-opens the
+		// popup and steals focus from the target window before
+		// the paste lands — most visibly when the target is a
+		// terminal/TUI where the paste never gets a chance to
+		// reach the inner application.
+		//
+		// The guard unregisters the hotkey before AutoPaste,
+		// gives the X server ~20ms to release the grab, sends
+		// the paste, then re-registers the hotkey after a
+		// generous 300ms grace period. The re-registration
+		// happens in a goroutine to keep pasteClip from
+		// blocking.
+		if p.pasteHotkeyHotkeyMgr != nil && p.pasteHotkeyHandler != nil {
+			if err := p.pasteHotkeyHotkeyMgr.Unregister(p.pasteHotkeyShortcut); err != nil {
+				slog.Warn("pasteClip: failed to suspend hotkey",
+					"shortcut", p.pasteHotkeyShortcut.Raw,
+					"error", err,
+				)
+			} else {
+				slog.Debug("pasteClip: suspended popup hotkey")
+				time.Sleep(20 * time.Millisecond)
+				defer func() {
+					go func() {
+						time.Sleep(300 * time.Millisecond)
+						if err := p.pasteHotkeyHotkeyMgr.Register(p.pasteHotkeyShortcut, p.pasteHotkeyHandler); err != nil {
+							slog.Warn("pasteClip: failed to restore hotkey",
+								"shortcut", p.pasteHotkeyShortcut.Raw,
+								"error", err,
+							)
+						} else {
+							slog.Debug("pasteClip: restored popup hotkey")
+						}
+					}()
+				}()
+			}
+		}
+
 		if err := AutoPaste(p.previousWindowID, isImage); err != nil {
 			slog.Warn("pasteClip: AutoPaste failed", "error", err)
 			p.app.SendNotification(&fyne.Notification{

@@ -175,7 +175,14 @@ func main() {
 		if err != nil {
 			return fmt.Errorf("invalid shortcut %q: %w", shortcutStr, err)
 		}
-		return hotkeyMgr.Register(sc, handler)
+		if err := hotkeyMgr.Register(sc, handler); err != nil {
+			return err
+		}
+		// Wire the guard so pasteClip suspends the popup hotkey
+		// for ~300ms around each synthetic paste keypress. See
+		// popup.go pasteClip doc for the rationale.
+		popupWin.SetPasteHotkeyHook(hotkeyMgr, sc, handler)
+		return nil
 	}
 
 	unregisterHotkey := func(shortcutStr string) error {

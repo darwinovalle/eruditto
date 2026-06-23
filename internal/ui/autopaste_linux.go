@@ -207,46 +207,43 @@ func wantsShiftVPaste(focusedPID int) bool {
 // to the focused application. isImage reports whether the clip on
 // the clipboard is an image (true) or text (false).
 //
-// Returns "ctrl+shift+v" only when both isImage=true AND the focus
-// target is a terminal that captures Ctrl+V (where the SHIFT is
-// strictly required to reach the underlying TUI paste handler).
+// Returns "ctrl+shift+v" whenever the focused process matches the
+// terminal/shift-requires-paste set AND that process is not a known
+// browser binary.
 //
 // In all other cases returns "ctrl+v":
 //
-//   - Text clips: always ctrl+v. Ctrl+V and Ctrl+Shift+V both
-//     reach the application's paste handler; SHIFT is unnecessary
-//     for text and we prefer the simpler shortcut.
+//   - Text clips into Electron / browser apps (Excalidraw, Figma,
+//     draw.io): ctrl+v. Plain Ctrl+V reaches the paste handler in
+//     web apps; SHIFT in Excalidraw toggles "paste as plain text",
+//     which is harmless for text but does drop images, and is
+//     unnecessary when the clipboard holds text.
 //
-//   - Image clips into Electron / browser apps (Excalidraw,
-//     Figma, draw.io): always ctrl+v. This is critical — in
-//     Excalidraw the SHIFT modifier toggles a "paste as plain
-//     text" mode; when an image is on the clipboard and Shift is
-//     held, Excalidraw silently drops the image. Sending Ctrl+V
-//     avoids this trap. (Excalidraw binds both shortcuts to the
-//     same paste handler — Shift only acts as the plain-text
-//     toggle — so we don't lose functionality by avoiding SHIFT.)
+//   - Text clips into terminals (vim/bash): "ctrl+shift+v". The
+//     TTY captures plain Ctrl+V (e.g., to enter visual-block
+//     mode in nvim), so SHIFT is required to reach the terminal's
+//     paste handler.
 //
-//   - Image clips into non-terminal GUI apps: always ctrl+v.
+//   - Image clips into Electron / browser apps: ctrl+v. Critical
+//     — in Excalidraw the SHIFT modifier toggles "paste as plain
+//     text"; when an image is on the clipboard and Shift is held,
+//     Excalidraw silently drops the image. Sending Ctrl+V avoids
+//     the trap. (Excalidraw binds both shortcuts to the same
+//     paste handler — Shift only acts as the plain-text toggle —
+//     so we don't lose functionality by avoiding SHIFT.)
 //
 //   - Image clips into terminals (rare — pasting PNGs into
 //     vim/bash): ctrl+shift+v because the TTY captures plain
 //     Ctrl+V.
 //
+//   - Image clips into non-terminal GUI apps: ctrl+v.
+//
 // Note: for browser-based apps, the keyboard shortcut is sent
 // regardless of whether the target web app will actually accept
-// it (see AutoPaste's doc comment for why we do not attempt to
-// give the canvas DOM focus). If the user has manually clicked
-// into Excalidraw's canvas, the keypress will reach Excalidraw
-// and the paste will work; otherwise the user pastes manually
-// with Ctrl+V in the browser.
+// it. If the user has manually clicked into Excalidraw's canvas,
+// the keypress will reach Excalidraw and the paste will work;
+// otherwise the user pastes manually with Ctrl+V in the browser.
 func DetectPasteShortcut(isImage bool) string {
-	// Fast path: text clips always use ctrl+v. No need to
-	// enumerate focused processes, and SHIFT only adds risk of
-	// "paste as plain text" toggling in some web apps.
-	if !isImage {
-		return "ctrl+v"
-	}
-
 	pid, err := focusedWindowPID()
 	if err != nil {
 		// No focused window — fall back to ctrl+v, the
@@ -254,24 +251,31 @@ func DetectPasteShortcut(isImage bool) string {
 		return "ctrl+v"
 	}
 
-	// For images, only return ctrl+shift+v if the focused
-	// process is a known terminal (or one of its ancestors is).
-	// Browsers/Electron apps get plain ctrl+v to avoid the
-	// "paste as plain text" trap that drops images.
+	// For text and image alike: if the focused process does not
+	// require SHIFT for pasting (regular GUI apps), use plain
+	// ctrl+v. The isImage distinction matters only at the very
+	// end, because browser apps can match wantsShiftVPaste but
+	// still need ctrl+v (image case).
 	if !wantsShiftVPaste(pid) {
 		return "ctrl+v"
 	}
-	// The focused (or ancestor) PID maps to a known terminal
-	// name. Verify it's not a browser/electron process before
-	// sending SHIFT — wantsShiftVPaste also matches browsers in
-	// its shiftVPasteProcesses set, but we want browsers to use
-	// ctrl+v for images (see long doc above).
+
+	// wantsShiftVPaste matched. Verify it's not actually a
+	// browser/electron process before sending SHIFT — both
+	// terminals and electron-based apps can populate
+	// shiftVPasteProcesses via process-tree ancestors, but only
+	// terminals want SHIFT.
 	name, err := processName(pid)
-	if err == nil {
-		if isBrowserProcessName(name) {
-			return "ctrl+v"
-		}
+	if err == nil && isBrowserProcessName(name) {
+		// Browser: don't send SHIFT (would drop images and is
+		// pointless for text in Excalidraw).
+		return "ctrl+v"
 	}
+
+	// Treating as a terminal. SHIFT is required to bypass the
+	// TTY's handling of Ctrl+V. Identical behavior for text and
+	// image clips — terminals don't differentiate.
+	_ = isImage // isImage does not change the terminal shortcut.
 	return "ctrl+shift+v"
 }
 

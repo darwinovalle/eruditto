@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"strings"
 )
@@ -36,12 +37,30 @@ import (
 // window currently has focus.
 func AutoPaste(targetWindowID string, isImage bool) error {
 	shortcut := DetectPasteShortcut(isImage)
+	slog.Debug("AutoPaste: selected shortcut",
+		"shortcut", shortcut,
+		"target_window_id", targetWindowID,
+		"is_image", isImage,
+	)
 
 	args := []string{"key"}
-	if targetWindowID != "" {
-		args = append(args, "--window", targetWindowID)
-	}
-	args = append(args, "--clearmodifiers", shortcut)
+	// We intentionally do NOT honour --window here. AutoPaste is
+	// called after ActivateWindow has already moved X11 input
+	// focus to the desired window — exposing that target via
+	// --window to xdotool routes events to the window object but,
+	// on gnome-terminal and several other terminals, the
+	// subordinate input widget (vte, gtk-launch-pane, etc.) is
+	// the actual key listener. Synthesising at the parent window
+	// therefore loses the focus-driven propagation; the inner
+	// widget never receives the paste.
+	//
+	// Sending without --window routes through X11's normal focus
+	// graph, which already points at the subordinate widget after
+	// ActivateWindow --sync + 50ms sleep.
+	//
+	// We intentionally do NOT pass --clearmodifiers either. See
+	// the comment further down for the rationale.
+	args = append(args, shortcut)
 
 	cmd := exec.Command("xdotool", args...)
 	if err := cmd.Run(); err != nil {
