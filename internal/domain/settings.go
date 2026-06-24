@@ -76,6 +76,14 @@ const (
 	//
 	// Stored as a string "true" / "false". Default: "true".
 	KeyPopupMouseTracking = "popup_mouse_tracking"
+
+	// KeyVimNavigation controls whether j/k move the popup's
+	// selected row down/up by one (vim-style line motion).
+	// When "false" (default), only the Up/Down arrow keys
+	// navigate; j/k fall through and are typed into the search
+	// entry. The Enter key always triggers paste regardless.
+	// Stored as a string "true" / "false". Default: "false".
+	KeyVimNavigation = "vim_navigation"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,6 +106,7 @@ var DefaultSettings = map[string]string{
 	KeyPollIntervalMs:    "500",
 	KeyAutoPaste:         "false",
 	KeyPopupMouseTracking: "true",
+	KeyVimNavigation:      "false",
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -146,6 +155,11 @@ func ValidateSetting(key, value string) error {
 		}
 		return nil
 	case KeyPopupMouseTracking:
+		if value != "true" && value != "false" {
+			return fmt.Errorf("must be true or false")
+		}
+		return nil
+	case KeyVimNavigation:
 		if value != "true" && value != "false" {
 			return fmt.Errorf("must be true or false")
 		}

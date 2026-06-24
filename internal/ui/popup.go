@@ -98,6 +98,19 @@ type PopupWindow struct {
 
 	// rowCache maps list row containers to their metadata.
 	rowCache map[fyne.CanvasObject]*clipRow
+
+	// selectedID tracks the row currently highlighted by the
+	// popup list. We keep our own copy because fyne.widget.List
+	// does not expose a public SelectedID() method, but OnSelected
+	// fires on every Select() call (including programmatic) so
+	// we hook it in onClipSelected to keep this in sync.
+	selectedID widget.ListItemID
+
+	// navigating is set to true while programmatic Select() calls
+	// happen from handleArrow / handleEnter. onClipSelected checks
+	// it to suppress the auto-paste that would otherwise fire
+	// every time the list re-highlights an arrow-key target.
+	navigating bool
 }
 
 // NewPopupWindow constructs the popup. The window is hidden until Show().
@@ -119,6 +132,12 @@ func NewPopupWindow(
 		app:         app,
 		clipSvc:     clipSvc,
 		repo:        repo,
+		settingsSvc: nil,
+		// -1 means "no row selected yet"; handleArrow treats it
+		// as "start from the top" so the first j/k move lands
+		// the user on the natural first row instead of jumping
+		// straight to a previously-pasted row.
+		selectedID:  -1,
 		clipChanged: make(chan struct{}, 1),
 		rowCache:    make(map[fyne.CanvasObject]*clipRow),
 	}
@@ -171,6 +190,22 @@ func (p *PopupWindow) readMouseTrackingSetting() bool {
 	val, err := p.settingsSvc.Get(ctx, domain.KeyPopupMouseTracking)
 	if err != nil {
 		return true
+	}
+	return val == "true"
+}
+
+// readVimNavigationSetting returns the user's preference for
+// vim-style j/k navigation in the popup. Default is false
+// (arrow-key-only) when the setting can't be read.
+func (p *PopupWindow) readVimNavigationSetting() bool {
+	if p.settingsSvc == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	val, err := p.settingsSvc.Get(ctx, domain.KeyVimNavigation)
+	if err != nil {
+		return false
 	}
 	return val == "true"
 }
@@ -529,6 +564,13 @@ func (p *PopupWindow) onSearchChanged(query string) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (p *PopupWindow) onClipSelected(id widget.ListItemID) {
+	p.selectedID = id
+	// Suppress auto-paste when the selection came from
+	// handleArrow (programmatic) — the navigation has explicitly
+	// stepped to a row and the user must press Enter to commit.
+	if p.navigating {
+		return
+	}
 	if id >= len(p.filtered) {
 		return
 	}
@@ -737,18 +779,98 @@ func (p *PopupWindow) handleKey(ev *fyne.KeyEvent) {
 		p.Hide()
 
 	case fyne.KeyReturn, fyne.KeyEnter:
-		if len(p.filtered) == 0 {
-			return
-		}
-		idx := 0
-		p.pasteClip(p.filtered[idx])
+		p.handleEnter()
 
 	case fyne.KeyUp:
-		p.clipList.ScrollToTop()
+		p.handleArrow(-1)
 
 	case fyne.KeyDown:
-		p.win.Canvas().Focus(p.clipList)
+		p.handleArrow(+1)
+
+	case fyne.KeyJ:
+		// j is only navigation when vim mode is on AND the
+		// search entry is not focused. Otherwise the key
+		// types as the letter "j".
+		if p.readVimNavigationSetting() && !p.searchEntryFocused() {
+			p.handleArrow(+1)
+		}
+
+	case fyne.KeyK:
+		if p.readVimNavigationSetting() && !p.searchEntryFocused() {
+			p.handleArrow(-1)
+		}
 	}
+}
+
+// handleEnter triggers paste for the currently selected row.
+// If no row is selected, picks index 0 (top of the list) so
+// users can press Ctrl+Shift+Z, type a search term, hit Enter
+// without ever touching the arrow keys after the search
+// settles (the first match becomes the highlighted row of
+// focus, but behaviour matches what most clipboard managers
+// do).
+//
+// No-op when there are no rows.
+func (p *PopupWindow) handleEnter() {
+	if len(p.filtered) == 0 {
+		return
+	}
+	id := p.selectedID
+	if id < 0 || id >= len(p.filtered) {
+		id = 0
+	}
+	// Make sure the highlighted row matches what we paste —
+	// even if no arrow key was pressed, calling Select() also
+	// ensures any UI state (scroll position, last-clicked
+	// highlight) is consistent before paste. The OnSelected
+	// callback is suppressed via the navigating flag.
+	p.navigating = true
+	p.clipList.Select(id)
+	p.navigating = false
+	p.pasteClip(p.filtered[id])
+}
+
+// handleArrow moves the highlighted row by delta (signed).
+//   - delta == +1 : move down by 1
+//   - delta == -1 : move up by 1
+//
+// Clamps at 0 and len(filtered)-1. Scrolls the selection into
+// view. No-op when the list is empty.
+func (p *PopupWindow) handleArrow(delta int) {
+	if len(p.filtered) == 0 {
+		return
+	}
+	id := p.selectedID
+	if id < 0 {
+		id = 0
+	}
+	id += delta
+	if id < 0 {
+		id = 0
+	}
+	if id >= len(p.filtered) {
+		id = len(p.filtered) - 1
+	}
+	// Programmatic Select fires onClipSelected synchronously.
+	// onClipSelected checks the navigating flag and only
+	// updates selectedID — it does not invoke pasteClip.
+	p.navigating = true
+	p.clipList.Select(id)
+	p.navigating = false
+}
+
+// searchEntryFocused reports whether the search entry widget
+// has keyboard focus. We need to know this so j/k typed there
+// become literal characters typed into the search field instead
+// of being intercepted as navigation shortcuts.
+func (p *PopupWindow) searchEntryFocused() bool {
+	if p.searchEntry == nil {
+		return false
+	}
+	if p.win == nil {
+		return false
+	}
+	return p.win.Canvas().Focused() == p.searchEntry
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -756,6 +878,7 @@ func (p *PopupWindow) handleKey(ev *fyne.KeyEvent) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (p *PopupWindow) refreshList() {
+	p.selectedID = -1
 	p.clipList.UnselectAll()
 	p.clipList.Refresh()
 	if len(p.filtered) > 0 {
