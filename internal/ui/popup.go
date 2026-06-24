@@ -284,7 +284,21 @@ func (p *PopupWindow) build() {
 	p.win.Resize(fyne.NewSize(popupWidth, popupHeight))
 	p.win.SetFixedSize(true)
 
-	// Close on focus loss
+	// Close-button semantics: clicking the popup's title-bar X
+	// hides the window instead of quitting the application.
+	// Eruditto is a tray-resident daemon — explicit quit lives
+	// in the system tray's "Quit Eruditto" menu item. Without
+	// the close intercept Fyne treats the click like Quit on
+	// most platforms, which kicks the user out of the daemon
+	// even though the monitor / clipboard / hotkey services
+	// are still wanted in the background.
+	//
+	// We also set SetOnClosed to a no-op so that, if anything
+	// ever does trigger an actual Close() (e.g. a future code
+	// path that explicitly closes the popup), Fyne does not
+	// blow up trying to run a default cleanup that's not
+	// defined. Hide() is the canonical "close" path now.
+	p.win.SetCloseIntercept(p.Hide)
 	p.win.SetOnClosed(func() {})
 	p.win.Canvas().SetOnTypedKey(p.handleKey)
 
