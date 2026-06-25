@@ -214,28 +214,14 @@ func (s *SettingsWindow) buildWindow() {
 			"Popup placement",
 			container.NewVBox(
 				sf.mouseTrackingCheck,
-				widget.NewLabelWithStyle(
-					"When enabled, the popup opens next to the mouse cursor. "+
-						"When disabled, the popup opens centred on the screen "+
-						"where the cursor is, useful for multi-monitor setups "+
-						"where you want a predictable location.",
-					fyne.TextAlignLeading,
-					fyne.TextStyle{Italic: true},
-				),
+				
 			),
 		),
 		widget.NewFormItem(
 			"Keyboard navigation",
 			container.NewVBox(
 				sf.vimNavCheck,
-				widget.NewLabelWithStyle(
-					"When enabled, lowercase j and k navigate the clip list "+
-						"down and up, vim-style. Enter pastes the highlighted "+
-						"row regardless. When disabled, only the arrow keys "+
-						"navigate.",
-					fyne.TextAlignLeading,
-					fyne.TextStyle{Italic: true},
-				),
+				
 			),
 		),
 		widget.NewFormItem("Poll interval (ms)", container.NewVBox(

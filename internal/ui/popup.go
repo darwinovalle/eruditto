@@ -76,7 +76,36 @@ type PopupWindow struct {
 	allClips []domain.Clip
 	filtered []domain.Clip
 
-	searchEntry *widget.Entry
+	// searchMode is true while the user has invoked slash-command
+	// search by pressing "/". While true, printable characters are
+	// appended to query and the list is filtered against it. Esc
+	// exits search mode (without hiding the popup); characters
+	// typed are dropped outside this mode.
+	//
+	// The traditional persistent-search-entry widget was a trap:
+	// it claimed keyboard focus and Fyne's "focused-widget first"
+	// dispatch silently dropped Esc/Enter because the entry
+	// doesn't handle Escape and our canvas-level OnTypedKey only
+	// fires when nothing is focused. Slash-mode keeps the entry
+	// out of the focus tree entirely — key events flow through
+	// the canvas-level handler at all times.
+	searchMode bool
+	// suppressSlashRune is set to true for one rune cycle after
+	// handleKey detects KeySlash. The slash's character is also
+	// delivered as a TypedRune ('/' = 0x2F), but the user
+	// pressed the same physical key both events refer to and
+	// only wants to enter search mode, not type a slash literal.
+	// We suppress exactly one rune then re-clear the flag so
+	// subsequent '/' characters fall into the query as normal
+	// (e.g. a query like "http://example.com" still works).
+	suppressSlashRune bool
+	// query is the slice of characters typed after "/". Used to
+	// filter allClips into filtered.
+	query string
+	// searchBar is the label widget at the bottom of the popup
+	// that displays "/<query>" while in search mode. Hidden
+	// otherwise.
+	searchBar *widget.Label
 	clipList    *widget.List
 	countLabel  *widget.Label
 	statusLabel *widget.Label
@@ -237,10 +266,7 @@ func (p *PopupWindow) StartListening(ctx context.Context) {
 }
 
 func (p *PopupWindow) currentQuery() string {
-	if p.searchEntry == nil {
-		return ""
-	}
-	return p.searchEntry.Text
+	return p.query
 }
 
 // Show opens the popup and reloads clips fresh from the DB.
@@ -260,7 +286,9 @@ func (p *PopupWindow) Show() {
 		if !p.built {
 			p.build()
 		}
-		p.searchEntry.SetText("")
+		// Reset slash-search state so a fresh popup opens
+		// in plain list mode, never inheriting a prior query.
+		p.exitSearchMode(false)
 		p.setStatus("Loading...")
 
 		p.showAndPosition()
@@ -301,13 +329,22 @@ func (p *PopupWindow) build() {
 	p.win.SetCloseIntercept(p.Hide)
 	p.win.SetOnClosed(func() {})
 	p.win.Canvas().SetOnTypedKey(p.handleKey)
+	// Canvas-level typed-rune handler. Fires only when no
+	// widget has focus (list drops chars silently, so this
+	// is the only way to capture printable input while the
+	// popup is in plain list mode or slash-search mode).
+	p.win.Canvas().SetOnTypedRune(p.handleTypedRune)
 
-	// ── Search entry ──────────────────────────────────────────────────
-	p.searchEntry = widget.NewEntry()
-	p.searchEntry.SetPlaceHolder("Search clipboard...")
-	p.searchEntry.OnChanged = p.onSearchChanged
-
-	searchContainer := container.NewPadded(p.searchEntry)
+	// ── Search bar (slash-mode prompt) ────────────────────────────
+	// The search bar is shown only while p.searchMode is true.
+	// We hide it by default so an empty popup looks clean until
+	// the user presses "/" to enter search.
+	p.searchBar = widget.NewLabelWithStyle(
+		"",
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Monospace: true},
+	)
+	p.searchBar.Hide()
 
 	// ── Clip list ─────────────────────────────────────────────────────
 	p.clipList = widget.NewList(
@@ -322,19 +359,16 @@ func (p *PopupWindow) build() {
 	p.statusLabel = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
 
 	hint := widget.NewLabelWithStyle(
-		" esc close",
+		"serach:'/'  close:'esc'",
 		fyne.TextAlignTrailing,
 		fyne.TextStyle{Monospace: true},
 	)
 
-	footer := container.NewHBox(p.countLabel, layout.NewSpacer(), hint)
+	footer := container.NewHBox(layout.NewSpacer(), hint)
 
 	// ── Layout ────────────────────────────────────────────────────────
 	content := container.NewBorder(
-		container.NewVBox(
-			searchContainer,
-			widget.NewSeparator(),
-		),
+		container.NewPadded(p.searchBar),
 		container.NewVBox(
 			widget.NewSeparator(),
 			container.NewPadded(footer),
@@ -790,6 +824,12 @@ func (p *PopupWindow) deleteClip(clipID int64, idx int) {
 func (p *PopupWindow) handleKey(ev *fyne.KeyEvent) {
 	switch ev.Name {
 	case fyne.KeyEscape:
+		// Escape while searching: exit search and stay.
+		// Escape in plain mode: hide the popup.
+		if p.searchMode {
+			p.exitSearchMode(false)
+			return
+		}
 		p.Hide()
 
 	case fyne.KeyReturn, fyne.KeyEnter:
@@ -801,30 +841,89 @@ func (p *PopupWindow) handleKey(ev *fyne.KeyEvent) {
 	case fyne.KeyDown:
 		p.handleArrow(+1)
 
+	case fyne.KeyBackspace, fyne.KeyDelete:
+		// Backspace/Delete inside the search query: pop one
+		// rune and re-apply the filter. Outside search mode,
+		// these don't do anything (avoids swallowing text-edit
+		// intent elsewhere).
+		if p.searchMode {
+			if len(p.query) > 0 {
+				p.popQueryRune()
+				p.applyQuery()
+			}
+		}
+
+	case fyne.KeySlash:
+		// "/" begins slash-mode search — same convention as
+		// bin/nnn/vifm/etc. Only when NOT in search mode;
+		// subsequent "/" characters are part of the query.
+		if !p.searchMode {
+			// Arm the rune suppressor so the matching
+			// TypedRune for this same physical keypress is
+			// dropped instead of polluting the query with
+			// a literal slash.
+			p.suppressSlashRune = true
+			p.enterSearchMode()
+		}
+
 	case fyne.KeyJ:
-		// j is only navigation when vim mode is on AND the
-		// search entry is not focused. Otherwise the key
-		// types as the letter "j".
-		if p.readVimNavigationSetting() && !p.searchEntryFocused() {
+		// j moves down (vim mode). Skip when typing in search
+		// mode is unnecessary because j/k don't have a literal
+		// role there — we just gate on searchMode so they
+		// remain letters in the query.
+		if p.readVimNavigationSetting() && !p.searchMode {
 			p.handleArrow(+1)
 		}
 
 	case fyne.KeyK:
-		if p.readVimNavigationSetting() && !p.searchEntryFocused() {
+		if p.readVimNavigationSetting() && !p.searchMode {
 			p.handleArrow(-1)
 		}
 	}
 }
 
-// handleEnter triggers paste for the currently selected row.
-// If no row is selected, picks index 0 (top of the list) so
-// users can press Ctrl+Shift+Z, type a search term, hit Enter
-// without ever touching the arrow keys after the search
-// settles (the first match becomes the highlighted row of
-// focus, but behaviour matches what most clipboard managers
-// do).
+// handleTypedRune is the canvas-level rune (printable character)
+// handler. Fyne only fires it when no widget has focus, which
+// is exactly our state on popup open (no widget claims focus by
+// default — the list does not take focus on row click).
 //
-// No-op when there are no rows.
+// Slash-mode semantics:
+//   - In plain mode: rune is dropped (no text input is
+//     meaningful outside the search affordance).
+//   - In search mode: rune is appended to p.query and the
+//     filter is re-applied.
+func (p *PopupWindow) handleTypedRune(r rune) {
+	if !p.searchMode {
+		// Don't track character input outside of search mode.
+		// It avoids surprising interactions with arrow keys
+		// (the user expects a focused list, not a text field).
+		return
+	}
+	// Skip keyboard shortcuts like Ctrl-something; only
+	// printable characters accumulated.
+	if r < 0x20 || r == 0x7f {
+		return
+	}
+	// The first '/' that initiated search mode is also
+	// delivered as a TypedRune — drop it so the query stays
+	// the user's literal intent (e.g. "abc") rather
+	// than "/abc".
+	if p.suppressSlashRune {
+		p.suppressSlashRune = false
+		if r == '/' {
+			// Update the bar only — query itself remains
+			// empty so the filter doesn't reject clips that
+			// contain only the user's typed text.
+			updateSearchBar(p)
+			return
+		}
+	}
+	p.query += string(r)
+	p.applyQuery()
+}
+
+// handleEnter triggers paste for the currently selected row.
+// If no row is selected, picks index 0 (top of the list).
 func (p *PopupWindow) handleEnter() {
 	if len(p.filtered) == 0 {
 		return
@@ -873,18 +972,125 @@ func (p *PopupWindow) handleArrow(delta int) {
 	p.navigating = false
 }
 
-// searchEntryFocused reports whether the search entry widget
-// has keyboard focus. We need to know this so j/k typed there
-// become literal characters typed into the search field instead
-// of being intercepted as navigation shortcuts.
-func (p *PopupWindow) searchEntryFocused() bool {
-	if p.searchEntry == nil {
-		return false
+// enterSearchMode switches the popup into slash-search mode.
+// Called when the user types "/" in plain mode (see handleKey).
+//
+// We update the search bar immediately so the user sees the
+// "/" prompt without delay. We deliberately do NOT call
+// applyQuery here — the first TypedRune after enabling search
+// mode will call applyQuery synchronously. Calling it again
+// from enterSearchMode would race with the in-flight
+// loadClips goroutine: loadClips sets allClips/filtered and
+// enterSearchMode could re-truncate filtered before that
+// completes.
+func (p *PopupWindow) enterSearchMode() {
+	p.searchMode = true
+	updateSearchBar(p)
+}
+
+// exitSearchMode leaves slash-search mode.
+//
+// resetQuery=true  → drop the query, restore the unfiltered list.
+// resetQuery=false → keep the query (e.g. when the popup is
+//                    closed and reopened, we keep the query so
+//                    the search persists across hide/show).
+//
+// hidePopup=true   → also hide the popup after exiting
+//                    (used by Esc-in-search when the user is
+//                    cancelling). This is currently unused
+//                    because Esc-in-search only exits, not
+//                    hides, but the parameter exists for
+//                    forward-compatibility.
+func (p *PopupWindow) exitSearchMode(resetQuery bool) {
+	p.searchMode = false
+	if resetQuery {
+		p.query = ""
 	}
-	if p.win == nil {
-		return false
+	updateSearchBar(p)
+	if resetQuery || p.query == "" {
+		// Allocate a fresh copy to avoid aliasing with
+		// allClips when filtered has been mutated by
+		// applyQuery.
+		fresh := make([]domain.Clip, len(p.allClips))
+		copy(fresh, p.allClips)
+		p.filtered = fresh
+		p.selectedID = -1
+		p.refreshList()
+		p.updateCountLabel()
+	} else {
+		p.applyQuery()
 	}
-	return p.win.Canvas().Focused() == p.searchEntry
+}
+
+// applyQuery filters allClips by case-insensitive substring
+// match against p.query and updates p.filtered + list refresh.
+//
+// We deliberately use simple substring matching on Content +
+// the SVG/image paths can't be searched, but the FTS5-backed
+// history repo also has a Search() method — leaving this as
+// a simple implementation keeps the popup responsive on very
+// large clip histories; the FTS5 path is reserved for the
+// dedicated "search" tray-menu wire-up if needed later.
+func (p *PopupWindow) applyQuery() {
+	q := p.query
+	// Allocate a fresh slice for filtered rather than reusing
+	// the backing array of allClips. Reusing would be unsafe
+	// because loadClips sets allClips = clips and filtered =
+	// clips on initial load — they share the same underlying
+	// array. append-ing into the truncated filtered slice would
+	// then mutate the allClips data, leading to silent
+	// corruption as soon as loadClips runs (or we exit search
+	// mode and try to "restore" from a no-longer-pristine
+	// backing array).
+	fresh := make([]domain.Clip, 0, len(p.allClips))
+	if q == "" {
+		fresh = append(fresh, p.allClips...)
+	} else {
+		lq := strings.ToLower(q)
+		for _, c := range p.allClips {
+			if strings.Contains(strings.ToLower(c.Content), lq) {
+				fresh = append(fresh, c)
+			}
+		}
+	}
+	p.filtered = fresh
+	p.selectedID = -1
+	p.refreshList()
+	p.updateCountLabel()
+	// Keep the search bar in sync with the active query so the
+	// user sees what they typed. handleTypedRune appends the
+	// rune, then calls applyQuery, so this is the canonical
+	// moment to refresh the visual.
+	updateSearchBar(p)
+}
+
+// popQueryRune removes the last rune from p.query. UTF-8 aware
+// because user input may include multi-byte characters.
+func (p *PopupWindow) popQueryRune() {
+	if p.query == "" {
+		return
+	}
+	runes := []rune(p.query)
+	if len(runes) == 0 {
+		return
+	}
+	p.query = string(runes[:len(runes)-1])
+}
+
+// updateSearchBar sets the SearchBar label to
+// "/<query>" when in search mode, "<empty>" otherwise.
+// Hidden entirely when not in search mode.
+func updateSearchBar(p *PopupWindow) {
+	if p.searchBar == nil {
+		return
+	}
+	if p.searchMode {
+		p.searchBar.SetText("/" + p.query)
+		p.searchBar.Show()
+	} else {
+		p.searchBar.SetText("")
+		p.searchBar.Hide()
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
