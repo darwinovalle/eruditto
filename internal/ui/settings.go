@@ -77,23 +77,25 @@ func (s *SettingsWindow) Hide() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 type settingsForm struct {
-	hotkeyEntry     *widget.Entry
-	hotkeyErrLabel  *widget.Label
-	maxHistoryEntry *widget.Entry
-	themeSelect     *widget.Select
-	bootCheck       *widget.Check
-	pollEntry       *widget.Entry
-	statsLabel      *widget.Label
-	autoPasteCheck  *widget.Check
+	hotkeyEntry        *widget.Entry
+	hotkeyErrLabel     *widget.Label
+	maxHistoryEntry    *widget.Entry
+	themeSelect        *widget.Select
+	bootCheck          *widget.Check
+	pollEntry          *widget.Entry
+	statsLabel         *widget.Label
+	autoPasteCheck     *widget.Check
+	mouseTrackingCheck *widget.Check
+	vimNavCheck        *widget.Check
 }
 
 var sf settingsForm
 
 func (s *SettingsWindow) buildWindow() {
 	s.win = s.app.NewWindow("Settings")
-	s.win.Resize(fyne.NewSize(480, 520))
+	s.win.Resize(fyne.NewSize(480, 300))
 	s.win.CenterOnScreen()
-	s.win.SetFixedSize(true)
+	s.win.SetFixedSize(false)
 
 	// ── Hotkey field ──────────────────────────────────────────────────
 	sf.hotkeyEntry = widget.NewEntry()
@@ -137,6 +139,16 @@ func (s *SettingsWindow) buildWindow() {
 
 	sf.autoPasteCheck = widget.NewCheck(
 		"Paste immediately after selecting a clip",
+		nil,
+	)
+
+	sf.mouseTrackingCheck = widget.NewCheck(
+		"Popup follows mouse cursor",
+		nil,
+	)
+
+	sf.vimNavCheck = widget.NewCheck(
+		"Vim-style navigation (j/k)",
 		nil,
 	)
 
@@ -198,6 +210,20 @@ func (s *SettingsWindow) buildWindow() {
 				),
 			),
 		),
+		widget.NewFormItem(
+			"Popup placement",
+			container.NewVBox(
+				sf.mouseTrackingCheck,
+				
+			),
+		),
+		widget.NewFormItem(
+			"Keyboard navigation",
+			container.NewVBox(
+				sf.vimNavCheck,
+				
+			),
+		),
 		widget.NewFormItem("Poll interval (ms)", container.NewVBox(
 			sf.pollEntry,
 			widget.NewLabelWithStyle(
@@ -257,6 +283,8 @@ func (s *SettingsWindow) loadValues() {
 	sf.bootCheck.SetChecked(all[domain.KeyStartOnBoot] == "true")
 	sf.pollEntry.SetText(all[domain.KeyPollIntervalMs])
 	sf.autoPasteCheck.SetChecked(all[domain.KeyAutoPaste] == "true")
+	sf.mouseTrackingCheck.SetChecked(all[domain.KeyPopupMouseTracking] == "true")
+	sf.vimNavCheck.SetChecked(all[domain.KeyVimNavigation] == "true")
 
 	go s.loadStats()
 }
@@ -278,6 +306,16 @@ func (s *SettingsWindow) save() {
 		autoPaste = "true"
 	}
 
+	mouseTracking := "true"
+	if !sf.mouseTrackingCheck.Checked {
+		mouseTracking = "false"
+	}
+
+	vimNav := "false"
+	if sf.vimNavCheck.Checked {
+		vimNav = "true"
+	}
+
 	type field struct{ key, val string }
 	fields := []field{
 		{domain.KeyHotkey, hotkeyStr},
@@ -286,6 +324,8 @@ func (s *SettingsWindow) save() {
 		{domain.KeyStartOnBoot, bootStr},
 		{domain.KeyPollIntervalMs, pollMs},
 		{domain.KeyAutoPaste, autoPaste},
+		{domain.KeyPopupMouseTracking, mouseTracking},
+		{domain.KeyVimNavigation, vimNav},
 	}
 
 	for _, f := range fields {

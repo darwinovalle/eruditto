@@ -160,14 +160,42 @@ func TestClip_Validate(t *testing.T) {
 			wantErr: ErrEmptyContent,
 		},
 		{
-			name: "image clip with empty path",
+			name: "image clip with empty path (tentative insert)",
+			// The service inserts image rows with an empty
+			// image_path so the DB can assign an id, then runs
+			// UpdateImagePath once the bytes are saved to disk.
+			// Validate() must permit this intermediate state.
 			clip: Clip{
 				Type:      ClipTypeImage,
 				ImagePath: "",
 				Hash:      "abc",
 				CreatedAt: fakeNow,
 			},
-			wantErr: ErrEmptyImagePath,
+			wantErr: nil,
+		},
+		{
+			name: "image clip with non-empty path (persisted record)",
+			clip: Clip{
+				Type:      ClipTypeImage,
+				ImagePath: "/tmp/clip.png",
+				Hash:      "abc",
+				CreatedAt: fakeNow,
+			},
+			wantErr: nil,
+		},
+		{
+			name: "image clip with Content set is invalid",
+			// Image clips carry data in the file, never in
+			// Content. A non-empty Content on an image clip
+			// indicates a programming error somewhere upstream.
+			clip: Clip{
+				Type:      ClipTypeImage,
+				ImagePath: "/tmp/clip.png",
+				Content:   "stray text",
+				Hash:      "abc",
+				CreatedAt: fakeNow,
+			},
+			wantErr: ErrInvalidType,
 		},
 		{
 			name: "clip with neither content nor image_path",

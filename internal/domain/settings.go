@@ -61,6 +61,29 @@ const (
 
 
 	KeyAutoPaste = "auto_paste"
+
+	// KeyPopupMouseTracking controls where the popup is placed
+	// when opened. When "true" (default), the popup follows the
+	// mouse cursor and lands near it on whichever screen the
+	// cursor is on. When "false", the popup is centred on the
+	// screen where the mouse cursor currently sits.
+	//
+	// Both modes use the cursor position to choose the screen:
+	// the user's keyboard focus at hotkey-press time is almost
+	// always co-located with the cursor, so this is a faithful
+	// proxy for "which monitor did the user just press the
+	// shortcut on".
+	//
+	// Stored as a string "true" / "false". Default: "true".
+	KeyPopupMouseTracking = "popup_mouse_tracking"
+
+	// KeyVimNavigation controls whether j/k move the popup's
+	// selected row down/up by one (vim-style line motion).
+	// When "false" (default), only the Up/Down arrow keys
+	// navigate; j/k fall through and are typed into the search
+	// entry. The Enter key always triggers paste regardless.
+	// Stored as a string "true" / "false". Default: "false".
+	KeyVimNavigation = "vim_navigation"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,13 +98,15 @@ const (
 // DefaultSettings maps every known setting key to its default value.
 // The map is read-only at runtime — never modify it.
 var DefaultSettings = map[string]string{
-	KeyHotkey:         "ctrl+shift+z",
-	KeyMaxHistory:     "5000",
-	KeyTheme:          "dark",
-	KeyStartOnBoot:    "false",
-	KeyDatabasePath:   "",
-	KeyPollIntervalMs: "500",
-	KeyAutoPaste: "false",
+	KeyHotkey:            "ctrl+shift+z",
+	KeyMaxHistory:        "5000",
+	KeyTheme:             "dark",
+	KeyStartOnBoot:       "false",
+	KeyDatabasePath:      "",
+	KeyPollIntervalMs:    "500",
+	KeyAutoPaste:         "false",
+	KeyPopupMouseTracking: "true",
+	KeyVimNavigation:      "false",
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -125,6 +150,16 @@ func ValidateSetting(key, value string) error {
 	case KeyPollIntervalMs:
 		return validatePollInterval(value)
 	case KeyAutoPaste:
+		if value != "true" && value != "false" {
+			return fmt.Errorf("must be true or false")
+		}
+		return nil
+	case KeyPopupMouseTracking:
+		if value != "true" && value != "false" {
+			return fmt.Errorf("must be true or false")
+		}
+		return nil
+	case KeyVimNavigation:
 		if value != "true" && value != "false" {
 			return fmt.Errorf("must be true or false")
 		}

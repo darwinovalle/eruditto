@@ -80,6 +80,21 @@ func (m *mockReader) WriteText(s string) error {
 	return m.writeErr
 }
 
+// WriteImage is a no-op stub added so mockReader satisfies the
+// Reader interface after WriteImage was added for image restore.
+// Existing text-path tests keep passing unchanged; image-path
+// behaviour will be covered by future tests in monitor_test.go
+// and service_test.go (not added here per the no-tests directive).
+func (m *mockReader) WriteImage(data []byte) error {
+	m.written.Store(string(data))
+	return m.writeErr
+}
+
+// Stop is a no-op stub so mockReader satisfies the Reader interface
+// after Stop was added for graceful shutdown of long-lived clipboard
+// daemons.
+func (m *mockReader) Stop() {}
+
 // lastWritten returns the last value passed to WriteText.
 func (m *mockReader) lastWritten() string {
 	v, _ := m.written.Load().(string)

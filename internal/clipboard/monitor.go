@@ -60,20 +60,37 @@ import (
 	"github.com/darwinovalle/eruditto/pkg/hash"
 )
 
+// imageProbe lets tests substitute ClipboardHasImage / ReadImage.
+// In production these point at the real xclip-backed functions in
+// image_linux.go. Tests can replace them to drive the image branch
+// without shelling out to xclip.
+//
+// The fields are functions rather than an interface so the monitor
+// does not need to import image_linux.go (which would pull `exec`
+// into the test binary's link graph on every platform).
+var imageProbe = struct {
+	HasImage func() bool
+	Read     func() ([]byte, error)
+}{
+	HasImage: ClipboardHasImage,
+	Read:     ReadImage,
+}
+
 // Event is what the monitor publishes to subscribers.
 //
 // Op discriminates the event shape:
 //
 //	EventOpNewClip — a new clip was captured; Clip is populated.
+//	                 ImageBytes is populated for image events and
+//	                 nil for text events. Subscribers that persist
+//	                 the event write the bytes to disk and then
+//	                 update the DB row with the resulting path.
 //	EventOpError   — a tick failed; Err is populated, Clip is zero.
-//
-// NewClip events with Clip.Type == ClipTypeImage are NOT produced
-// by Phase 5. The Event struct can carry them so subscribers do not
-// need to change when Phase 7 adds image support.
 type Event struct {
-	Op   EventOp
-	Clip domain.Clip
-	Err  error
+	Op         EventOp
+	Clip       domain.Clip
+	ImageBytes []byte // set only for image events; nil for text/error
+	Err        error
 }
 
 // EventOp identifies the kind of monitor event.
@@ -240,6 +257,57 @@ func (m *Monitor) tick(ctx context.Context) {
 	}
 
 	// Read current clipboard content.
+	//
+	// Image-first because xclip is the only reliable way to discover
+	// an image is present — ReadText on a clipboard holding image/png
+	// returns "target STRING not available". We probe for the image
+	// target first; only if it is absent do we fall back to text.
+	if imageProbe.HasImage() {
+		imageBytes, err := imageProbe.Read()
+		if err != nil {
+			m.log.Warn(
+				"failed to read clipboard image",
+				"error",
+				err,
+			)
+			return
+		}
+
+		h := hash.Bytes(imageBytes)
+
+		if h == m.LastHash() {
+			return
+		}
+
+		m.lastHash.Store(h)
+
+		// Build a tentative image clip with no path. The service
+		// layer is responsible for saving the bytes to disk and
+		// assigning a real image_path before inserting into the
+		// database. We cannot use domain.NewImageClip("path", h)
+		// here because the path is not yet known (the file is
+		// named after the DB-assigned clip ID, see
+		// internal/images/storage.go Save).
+		clip := domain.Clip{
+			Type:      domain.ClipTypeImage,
+			Hash:      h,
+			CreatedAt: time.Now().UTC(),
+		}
+
+		m.log.Debug(
+			"new image detected",
+			"hash", h,
+			"size", len(imageBytes),
+		)
+
+		m.publish(ctx, Event{
+			Op:         EventOpNewClip,
+			Clip:       clip,
+			ImageBytes: imageBytes,
+		})
+		return
+	}
+
 	text, err := m.reader.ReadText()
 	if err != nil {
 		m.log.Warn("clipboard read failed", "error", err)
