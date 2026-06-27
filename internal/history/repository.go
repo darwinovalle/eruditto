@@ -105,6 +105,42 @@ func (r *Repository) Insert(ctx context.Context, clip domain.Clip) (int64, error
 	return id, nil
 }
 
+// UpdateImagePath sets the image_path column for an existing clip row.
+//
+// Used by the clipboard service when persisting an image clip:
+//
+//  1. Insert the clip with an empty image_path → repo.Insert returns id
+//  2. Save the bytes to disk via internal/images.Storage.Save(id, bytes)
+//  3. Call UpdateImagePath(id, savedPath) so the row points at the file
+//
+// Two-step rather than one-step because the on-disk filename is
+// derived from the DB-assigned id (see internal/images/storage.go
+// fullPath), and the id is not knowable until the row exists.
+//
+// Returns a non-nil error if no row with the given id exists.
+// RowsAffected == 0 is treated as "not found" rather than silent
+// success so callers do not silently lose image_path updates.
+func (r *Repository) UpdateImagePath(ctx context.Context, id int64, imagePath string) error {
+	const q = `
+		UPDATE clips
+		SET    image_path = ?
+		WHERE  id = ?
+	`
+	result, err := r.db.SQL().ExecContext(ctx, q, imagePath, id)
+	if err != nil {
+		return fmt.Errorf("history: update image_path id=%d: %w", id, err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("history: update image_path id=%d: rows affected: %w", id, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("history: update image_path id=%d: not found", id)
+	}
+	r.log.Debug("clip image_path updated", "id", id, "image_path", imagePath)
+	return nil
+}
+
 // ToggleFavorite flips the is_favorite flag for the given clip ID.
 // Returns the new value of is_favorite after the toggle.
 func (r *Repository) ToggleFavorite(ctx context.Context, id int64) (bool, error) {
