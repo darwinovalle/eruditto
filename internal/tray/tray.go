@@ -105,8 +105,15 @@ func (t *Tray) UpdateClipCount(count int64) {
 func (t *Tray) onReady() {
 	t.log.Info("system tray ready", "version", t.version)
 
-	// Icon — generated placeholder; replace with real PNG before release.
-	systray.SetIcon(generateIcon())
+	// Icon — prefer the embedded tray PNG (small_white_icon.png)
+	// so the taskbar reflects the user's chosen design. Fall back
+	// to generateIcon() if the embedded bytes failed to load
+	// (e.g. an accidental RipGrep replace nuked them).
+	tIcon := SmallIcon()
+	if len(tIcon) == 0 {
+		tIcon = generateIcon()
+	}
+	systray.SetIcon(tIcon)
 	systray.SetTitle("Eruditto")
 	systray.SetTooltip("Eruditto — clipboard manager")
 

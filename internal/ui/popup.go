@@ -359,7 +359,7 @@ func (p *PopupWindow) build() {
 	p.statusLabel = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
 
 	hint := widget.NewLabelWithStyle(
-		"serach:'/'  close:'esc'",
+		"search:'/'  close:'esc'",
 		fyne.TextAlignTrailing,
 		fyne.TextStyle{Monospace: true},
 	)
