@@ -38,8 +38,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 
+	"github.com/darwinovalle/eruditto/internal/autostart"
 	"github.com/darwinovalle/eruditto/internal/clipboard"
 	"github.com/darwinovalle/eruditto/internal/database"
 	"github.com/darwinovalle/eruditto/internal/domain"
@@ -65,7 +67,40 @@ func main() {
 	// ── 1. Flags ──────────────────────────────────────────────────────
 	showPopup := flag.Bool("popup", false, "Show the clipboard history popup (forwards to running instance)")
 	debugLog := flag.Bool("debug", false, "Enable debug-level logging")
+	installDesktop := flag.Bool("install-desktop", false, "Install .desktop file + PNG icons to ~/.local/share, then exit. Opt-in; default eruditto never touches these.")
+	uninstallDesktop := flag.Bool("uninstall-desktop", false, "Remove the .desktop file + PNG icons that --install-desktop wrote, then exit. Idempotent and safe even if eruditto was never installed.")
 	flag.Parse()
+
+	// --install-desktop: opt-in launcher integration. Writes
+	// ~/.local/share/applications/eruditto.desktop plus 3 PNG
+	// icons into the hicolor tree, then exits 0.
+	// Re-running is idempotent.
+	//
+	// We do NOT write index.theme — that overwrites the user's
+	// comprehensive hicolor theme and breaks system icons.
+	if *installDesktop {
+		tray.InstallXDGIcons()
+		tray.InstallDesktopEntry()
+		fmt.Fprintln(os.Stderr, "installed .desktop + PNG icons; run `update-desktop-database ~/.local/share/applications/` to refresh the registry.")
+		os.Exit(0)
+	}
+
+	// --uninstall-desktop: reverse of --install-desktop.
+	// Removes:
+	//   1. Installed icons (3 PNGs) — only if their bytes
+	//      match eruditto's bundled bytes. We never delete
+	//      files the user might have hand-curated.
+	//   2. ~/.local/share/applications/eruditto.desktop
+	//   3. ~/.local/share/icons/hicolor/index.theme — ONLY
+	//      if it matches the minimal theme eruditto writes,
+	//      so we never destroy a comprehensive user theme.
+	//
+	// Safe to run even if eruditto was never installed.
+	if *uninstallDesktop {
+		n := tray.UninstallDesktop()
+		fmt.Fprintf(os.Stderr, "uninstalled %d eruditto-managed files from ~/.local/share; run `update-desktop-database ~/.local/share/applications/` (or `xdg-desktop-menu forceupdate`) to refresh the registry.\n", n)
+		os.Exit(0)
+	}
 
 	// ── 2. Logger ─────────────────────────────────────────────────────
 	logLevel := slog.LevelInfo
@@ -150,6 +185,21 @@ func main() {
 	// is created. We create it here, before the tray starts, because
 	// the tray's OnShowPopup callback references the popup window.
 	fyneApp := app.NewWithID(appID)
+	// Set the application icon to the user's chosen PNG so the
+	// window titlebar / alt-tab picker show their design. We use
+	// the medium variant as the canonical "app icon"; the larger
+	// variant is reserved for high-DPI contexts (see XDG install
+	// helper below). The tray package's SmallIcon() powers the
+	// system tray separately.
+	mediumPNG := tray.MediumIcon()
+	if len(mediumPNG) > 0 {
+		fyneApp.SetIcon(fyne.NewStaticResource("eruditto", mediumPNG))
+		// hicolor/index.theme + .desktop installation is
+		// opted-in via --install-desktop (see top of file).
+		// Default startup only sets the fyne-internal titlebar
+		// icon and never writes to the user's icon/theme
+		// directories.
+	}
 
 	// Set up custom theme that responds to dark/light/system settings.
 	// Read initial theme from database before applying.
@@ -164,6 +214,30 @@ func main() {
 	ui.SetThemeChangedCallback(func(mode string) {
 		fyneApp.Settings().SetTheme(ui.NewErudittoTheme(ui.GetCurrentTheme))
 	})
+
+	// Autostart reconciliation — bring the system in sync with
+	// the persisted KeyStartOnBoot preference. If the user has
+	// ever checked the box in settings but the autostart file
+	// went missing (deleted by accident or wiped by an OS
+	// upgrade), Restore. We pass os.Executable() so the
+	// autostart entry's Exec= line points at the binary the
+	// user just ran, not at "eruditto" from $PATH (which is
+	// ambiguous under dev workflows running `./eruditto` from
+	// the project tree).
+	//
+	// Best-effort: failures are logged but never block startup.
+	// The system can run fine without autostart.
+	ctxAuto, cancelAuto := context.WithTimeout(rootCtx, 1*time.Second)
+	if v, err := settingsSvc.Get(ctxAuto, domain.KeyStartOnBoot); err == nil {
+		exe, _ := os.Executable()
+		if exe == "" {
+			exe = "eruditto"
+		}
+		if err := autostart.Reconcile(v == "true", exe); err != nil {
+			log.Warn("autostart reconcile failed", "error", err)
+		}
+	}
+	cancelAuto()
 
 	// ── 11. UI windows ────────────────────────────────────────────────
 	popupWin := ui.NewPopupWindow(fyneApp, clipSvc, historyRepo)

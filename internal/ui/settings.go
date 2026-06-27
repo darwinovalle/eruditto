@@ -4,6 +4,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/darwinovalle/eruditto/internal/autostart"
 	"github.com/darwinovalle/eruditto/internal/domain"
 	"github.com/darwinovalle/eruditto/internal/history"
 	"github.com/darwinovalle/eruditto/internal/hotkeys"
@@ -135,7 +137,36 @@ func (s *SettingsWindow) buildWindow() {
 
 	sf.themeSelect = widget.NewSelect([]string{"dark", "light", "system"}, nil)
 
-	sf.bootCheck = widget.NewCheck("Launch Eruditto at login", nil)
+	sf.bootCheck = widget.NewCheck("Launch Eruditto at login", func(checked bool) {
+		// Live-toggle: engage/disengage the autostart the
+		// instant the user flips the box, without waiting
+		// for the Save button. The DB persistence still
+		// happens through the regular Save flow (the saved
+		// key is the canonical truth and Reconcile at
+		// startup restores the system from that key).
+		//
+		// We use os.Getenv to find the running executable
+		// because settings.go doesn't store the path
+		// the binary was launched from. os.Executable() would
+		// resolve /proc/self/exe but Go on systems where
+		// /proc isn't mounted (rare) returns empty;
+		// the env var PATH-based lookup would be more
+		// robust, but for now we assume /proc/self/exe
+		// works on linux where this matters.
+		exe, err := os.Executable()
+		if err != nil || exe == "" {
+			exe = "eruditto"
+		}
+		if checked {
+			if e := autostart.Enable(exe); e != nil {
+				log.Printf("settings: autostart enable failed: %v", e)
+			}
+		} else {
+			if _, e := autostart.Disable(); e != nil {
+				log.Printf("settings: autostart disable failed: %v", e)
+			}
+		}
+	})
 
 	sf.autoPasteCheck = widget.NewCheck(
 		"Paste immediately after selecting a clip",
