@@ -1,0 +1,24 @@
+Package: eruditto
+Version: 0.1.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Depends: libx11-6, libgl1, libxcb1, libxau6, libxdmcp6, libbsd0, xclip, xdotool, xdg-utils, desktop-file-utils, libnotify-bin
+Maintainer: Darwin Ovalle <dovallep@unal.edu.co>
+Description: Ditto-inspired clipboard manager for Linux
+ Eruditto monitors your clipboard history and lets you recall,
+ search, and paste previous clips — including images — via a
+ lightweight popup triggered by a global hotkey (default
+ Ctrl+Shift+Z).
+ .
+ Features:
+  - Text and image clipboard history
+  - Full-text search (FTS5) with slash-mode filtering
+  - Pin important clips so they survive history trimming
+  - Auto-paste into the previously focused app
+  - Configurable global hotkey
+  - System tray with quick actions
+  - Start-on-boot (XDG autostart)
+  - Dark and light theme support
+Homepage: https://github.com/darwinovalle/eruditto
+License: MIT
