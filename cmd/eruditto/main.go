@@ -54,22 +54,29 @@ import (
 	"github.com/darwinovalle/eruditto/pkg/xdg"
 )
 
+var version = "dev"
+
 const (
-	version     = "dev"
-	appID       = "io.github.darwinovalle.eruditto"
-	lockFile    = "eruditto.lock"   // under XDG data dir
-	socketFile  = "eruditto.sock"   // under XDG data dir — IPC for --popup
+	appID      = "io.github.darwinovalle.eruditto"
+	lockFile   = "eruditto.lock"   // under XDG data dir
+	socketFile = "eruditto.sock"   // under XDG data dir — IPC for --popup
 )
 
 func main() {
 	startTime := time.Now()
 
 	// ── 1. Flags ──────────────────────────────────────────────────────
+	showVersion := flag.Bool("version", false, "Print version and exit")
 	showPopup := flag.Bool("popup", false, "Show the clipboard history popup (forwards to running instance)")
 	debugLog := flag.Bool("debug", false, "Enable debug-level logging")
 	installDesktop := flag.Bool("install-desktop", false, "Install .desktop file + PNG icons to ~/.local/share, then exit. Opt-in; default eruditto never touches these.")
 	uninstallDesktop := flag.Bool("uninstall-desktop", false, "Remove the .desktop file + PNG icons that --install-desktop wrote, then exit. Idempotent and safe even if eruditto was never installed.")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("eruditto %s\n", version)
+		os.Exit(0)
+	}
 
 	// --install-desktop: opt-in launcher integration. Writes
 	// ~/.local/share/applications/eruditto.desktop plus 3 PNG
