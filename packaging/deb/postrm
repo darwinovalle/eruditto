@@ -1,0 +1,29 @@
+#!/bin/sh
+# postrm — runs after dpkg removes eruditto
+set -e
+
+# Clean up any user-level .desktop/icons that --install-desktop may
+# have written. These live under ~/.local/ and are not managed by dpkg.
+# The binary is gone at this point so we remove the files directly.
+if [ -d "${HOME}/.local/share/icons/hicolor" ]; then
+    rm -f "${HOME}/.local/share/icons/hicolor/32x32/apps/eruditto.png"   2>/dev/null || true
+    rm -f "${HOME}/.local/share/icons/hicolor/64x64/apps/eruditto.png"   2>/dev/null || true
+    rm -f "${HOME}/.local/share/icons/hicolor/128x128/apps/eruditto.png" 2>/dev/null || true
+fi
+rm -f "${HOME}/.local/share/applications/eruditto.desktop" 2>/dev/null || true
+rm -f "${HOME}/.config/autostart/eruditto.desktop"          2>/dev/null || true
+
+# Rebuild system caches after icon removal.
+if [ -x /usr/bin/gtk-update-icon-cache ]; then
+    gtk-update-icon-cache -f /usr/share/icons/hicolor/ 2>/dev/null || true
+fi
+
+if [ -x /usr/bin/update-desktop-database ]; then
+    update-desktop-database /usr/share/applications/ 2>/dev/null || true
+fi
+
+if [ -x /usr/bin/xdg-desktop-menu ]; then
+    xdg-desktop-menu forceupdate 2>/dev/null || true
+fi
+
+#DEBHELPER#
