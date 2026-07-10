@@ -304,10 +304,10 @@ func (s *Service) GetMaxHistory(ctx context.Context) int {
 }
 
 func (s *Service) GetAutoPaste(ctx context.Context) bool {
-    value, err := s.Get(ctx, domain.KeyAutoPaste)
-    if err != nil {
-        return false
-    }
+	value, err := s.Get(ctx, domain.KeyAutoPaste)
+	if err != nil {
+		return false
+	}
 
-    return strings.EqualFold(value, "true")
+	return strings.EqualFold(value, "true")
 }

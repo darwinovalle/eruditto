@@ -46,7 +46,8 @@ func TestBytes_EmptyInput(t *testing.T) {
 		t.Error("Bytes(nil) and Bytes([]byte{}) differ")
 	}
 }
-    // TestString_KnownVector checks the same FIPS vector but through
+
+// TestString_KnownVector checks the same FIPS vector but through
 // the String entry point.
 func TestString_KnownVector(t *testing.T) {
 	got := String("abc")
@@ -62,16 +63,16 @@ func TestString_KnownVector(t *testing.T) {
 // ASCII, multi-byte UTF-8, embedded NULs, and a moderately long string.
 func TestStringAndBytesAgree(t *testing.T) {
 	inputs := []string{
-		"",                                  // empty
-		"abc",                               // short ASCII
-		"hello world",                       // spaces
-		"caf\u00e9 au lait",                 // Latin-1 supplement (é)
-		"\u4f60\u597d",                      // CJK (你好)
-		"\U0001F44D",                        // emoji (👍)
-		"line1\nline2\rline3\tline4",        // control characters
-		"a\x00b\x00c",                       // embedded NULs
-		strings.Repeat("x", 1024),           // 1 KiB
-		strings.Repeat("ab", 4096),          // 8 KiB
+		"",                           // empty
+		"abc",                        // short ASCII
+		"hello world",                // spaces
+		"caf\u00e9 au lait",          // Latin-1 supplement (é)
+		"\u4f60\u597d",               // CJK (你好)
+		"\U0001F44D",                 // emoji (👍)
+		"line1\nline2\rline3\tline4", // control characters
+		"a\x00b\x00c",                // embedded NULs
+		strings.Repeat("x", 1024),    // 1 KiB
+		strings.Repeat("ab", 4096),   // 8 KiB
 	}
 	for _, s := range inputs {
 		t.Run(s, func(t *testing.T) {
@@ -83,6 +84,7 @@ func TestStringAndBytesAgree(t *testing.T) {
 		})
 	}
 }
+
 // TestLargeInput makes sure the function handles arbitrary input
 // length without truncation or buffer mishaps. We use 1 MiB of
 // crypto-random bytes; we don't care about the exact value, just
@@ -109,6 +111,7 @@ func TestLargeInput(t *testing.T) {
 		t.Errorf("Bytes(1MiB) differs from crypto/sha256:\n  got  = %q\n  want = %q", got[:16]+"…", want[:16]+"…")
 	}
 }
+
 // TestOutputShape asserts the structural property of every output:
 // exactly 64 lowercase hex characters, no uppercase, no padding.
 // This is the property callers rely on (e.g., when storing hashes

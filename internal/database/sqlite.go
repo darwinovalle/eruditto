@@ -49,9 +49,9 @@ import (
 // queries. We wrap rather than embed so we can add methods (Stats,
 // Ping, Close) without polluting the *sql.DB namespace.
 type DB struct {
-	sql    *sql.DB
-	path   string
-	log    *slog.Logger
+	sql  *sql.DB
+	path string
+	log  *slog.Logger
 }
 
 // Open opens (or creates) the SQLite database at path, applies all

@@ -66,6 +66,9 @@ func (s *SettingsWindow) Show() {
 	s.loadValues()
 	s.win.Show()
 	s.win.RequestFocus()
+	fyne.Do(func() {
+		s.win.CenterOnScreen()
+	})
 }
 
 func (s *SettingsWindow) Hide() {
@@ -96,7 +99,6 @@ var sf settingsForm
 func (s *SettingsWindow) buildWindow() {
 	s.win = s.app.NewWindow("Settings")
 	s.win.Resize(fyne.NewSize(480, 300))
-	s.win.CenterOnScreen()
 	s.win.SetFixedSize(false)
 
 	// ── Hotkey field ──────────────────────────────────────────────────
@@ -245,14 +247,12 @@ func (s *SettingsWindow) buildWindow() {
 			"Popup placement",
 			container.NewVBox(
 				sf.mouseTrackingCheck,
-				
 			),
 		),
 		widget.NewFormItem(
 			"Keyboard navigation",
 			container.NewVBox(
 				sf.vimNavCheck,
-				
 			),
 		),
 		widget.NewFormItem("Poll interval (ms)", container.NewVBox(
@@ -302,7 +302,7 @@ func (s *SettingsWindow) loadValues() {
 
 	sf.hotkeyEntry.SetText(all[domain.KeyHotkey])
 	sf.maxHistoryEntry.SetText(all[domain.KeyMaxHistory])
-	
+
 	// Normalize theme value
 	themeVal := strings.ToLower(all[domain.KeyTheme])
 	if themeVal == "" {
@@ -310,7 +310,7 @@ func (s *SettingsWindow) loadValues() {
 	}
 	sf.themeSelect.SetSelected(themeVal)
 	currentTheme = themeVal // update global
-	
+
 	sf.bootCheck.SetChecked(all[domain.KeyStartOnBoot] == "true")
 	sf.pollEntry.SetText(all[domain.KeyPollIntervalMs])
 	sf.autoPasteCheck.SetChecked(all[domain.KeyAutoPaste] == "true")
