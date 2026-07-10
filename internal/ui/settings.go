@@ -66,6 +66,9 @@ func (s *SettingsWindow) Show() {
 	s.loadValues()
 	s.win.Show()
 	s.win.RequestFocus()
+	fyne.Do(func() {
+		s.win.CenterOnScreen()
+	})
 }
 
 func (s *SettingsWindow) Hide() {
@@ -96,7 +99,6 @@ var sf settingsForm
 func (s *SettingsWindow) buildWindow() {
 	s.win = s.app.NewWindow("Settings")
 	s.win.Resize(fyne.NewSize(480, 300))
-	s.win.CenterOnScreen()
 	s.win.SetFixedSize(false)
 
 	// ── Hotkey field ──────────────────────────────────────────────────
