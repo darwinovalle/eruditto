@@ -36,8 +36,8 @@ type mockReader struct {
 	idx     int      // current index into texts
 	readErr error    // if non-nil, ReadText returns this error
 
-	written     atomic.Value // string — last value passed to WriteText
-	writeErr    error        // if non-nil, WriteText returns this error
+	written  atomic.Value // string — last value passed to WriteText
+	writeErr error        // if non-nil, WriteText returns this error
 }
 
 // setTexts replaces the read sequence. index resets to 0.
@@ -250,9 +250,10 @@ func TestMonitor_SkipsEmptyClipboard(t *testing.T) {
 // Important: the suppressed tick returns before calling ReadText, so
 // the mock reader index does NOT advance during the suppressed tick.
 // Sequence seen by the reader:
-//   tick 1 (suppressed): ReadText NOT called — index stays at 0
-//   tick 2 (normal):     ReadText called    — returns "hello", fires event
-//   tick 3 (normal):     ReadText called    — returns "world", fires event
+//
+//	tick 1 (suppressed): ReadText NOT called — index stays at 0
+//	tick 2 (normal):     ReadText called    — returns "hello", fires event
+//	tick 3 (normal):     ReadText called    — returns "world", fires event
 //
 // We assert: no event fires during the suppressed window (tick 1),
 // and at least one NewClip event fires after (tick 2+).
@@ -477,5 +478,5 @@ func TestMonitor_EventsChannelFullDrops(t *testing.T) {
 
 type atomicCounter struct{ v atomic.Int64 }
 
-func (c *atomicCounter) inc()        { c.v.Add(1) }
-func (c *atomicCounter) get() int64  { return c.v.Load() }
+func (c *atomicCounter) inc()       { c.v.Add(1) }
+func (c *atomicCounter) get() int64 { return c.v.Load() }

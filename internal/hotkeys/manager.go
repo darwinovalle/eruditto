@@ -5,22 +5,22 @@
 //
 // Display server compatibility:
 //
-//   X11:     Full support via golang.design/x/hotkey.
-//            The hotkey is registered with the X server and fires
-//            regardless of which window has focus.
+//	X11:     Full support via golang.design/x/hotkey.
+//	         The hotkey is registered with the X server and fires
+//	         regardless of which window has focus.
 //
-//   Wayland: Global hotkeys are blocked by the Wayland security model.
-//            Unprivileged applications cannot intercept keyboard events
-//            system-wide. We detect Wayland at startup, log a clear
-//            explanation, send a desktop notification via notify-send,
-//            and return a no-op manager that never crashes.
+//	Wayland: Global hotkeys are blocked by the Wayland security model.
+//	         Unprivileged applications cannot intercept keyboard events
+//	         system-wide. We detect Wayland at startup, log a clear
+//	         explanation, send a desktop notification via notify-send,
+//	         and return a no-op manager that never crashes.
 //
 // Architecture:
 //
-//   HotkeyManager is an interface. main.go calls New() which inspects
-//   the environment and returns either an x11Manager or a noopManager.
-//   All other code is written against the interface — no if/else for
-//   display servers anywhere except in New().
+//	HotkeyManager is an interface. main.go calls New() which inspects
+//	the environment and returns either an x11Manager or a noopManager.
+//	All other code is written against the interface — no if/else for
+//	display servers anywhere except in New().
 package hotkeys
 
 import (
@@ -136,8 +136,8 @@ func New(log *slog.Logger) HotkeyManager {
 		"DISPLAY", os.Getenv("DISPLAY"),
 	)
 	return &x11Manager{
-		log:      log,
-		hotkeys:  make(map[string]*registeredHotkey),
+		log:     log,
+		hotkeys: make(map[string]*registeredHotkey),
 	}
 }
 

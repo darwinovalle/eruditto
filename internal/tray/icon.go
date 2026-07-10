@@ -111,7 +111,8 @@ func validateIcon(name string, data []byte) error {
 // don't need any of this; they read from the embedded bytes.
 //
 // Reference:
-//   https://specifications.freedesktop.org/icon-theme-spec/icon-theme-spec-latest.html
+//
+//	https://specifications.freedesktop.org/icon-theme-spec/icon-theme-spec-latest.html
 func InstallXDGIcons() {
 	root := os.Getenv("XDG_DATA_HOME")
 	if root == "" {

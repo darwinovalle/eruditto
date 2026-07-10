@@ -141,29 +141,29 @@ func NewAtottoReader() Reader {
 // with a clear context so the monitor's log line tells the user
 // what is wrong.
 func (a *atottoReader) ReadText() (string, error) {
-    s, err := clipboard.ReadAll()
-    if err != nil {
+	s, err := clipboard.ReadAll()
+	if err != nil {
 
-        // Image clipboard contents are expected.
-        // The atotto library reports:
-        //
-        // Error: target STRING not available
-        //
-        // when the clipboard currently holds image/png.
-        //
-        // Treat it as "no text available" rather than a real error.
+		// Image clipboard contents are expected.
+		// The atotto library reports:
+		//
+		// Error: target STRING not available
+		//
+		// when the clipboard currently holds image/png.
+		//
+		// Treat it as "no text available" rather than a real error.
 
-        if strings.Contains(err.Error(), "target STRING not available") {
-            return "", nil
-        }
+		if strings.Contains(err.Error(), "target STRING not available") {
+			return "", nil
+		}
 
-        return "", fmt.Errorf(
-            "clipboard: read text: %w",
-            err,
-        )
-    }
+		return "", fmt.Errorf(
+			"clipboard: read text: %w",
+			err,
+		)
+	}
 
-    return s, nil
+	return s, nil
 }
 
 // WriteText calls the OS-specific clipboard write path.
@@ -246,7 +246,7 @@ func (a *atottoReader) WriteImage(data []byte) error {
 		"-selection", "clipboard",
 		"-t", "image/png",
 		"-loops", "0", // stay alive, serve data on demand
-		"-q",          // suppress xclip's stderr noise
+		"-q", // suppress xclip's stderr noise
 		"-i",
 	)
 	cmd.Stdin = bytes.NewReader(data)

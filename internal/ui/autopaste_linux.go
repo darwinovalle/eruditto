@@ -61,15 +61,15 @@ var shiftVPasteProcesses = map[string]struct{}{
 	// Browsers / web apps that use Ctrl+Shift+V for image paste.
 	// The focused window's PID is usually the browser renderer,
 	// which has the same binary name as the main browser process.
-	"chrome":     {},
-	"chromium":   {},
-	"chrome-bin": {},
-	"vivaldi":    {},
-	"brave":      {},
-	"edge":       {},
-	"firefox":    {},
+	"chrome":      {},
+	"chromium":    {},
+	"chrome-bin":  {},
+	"vivaldi":     {},
+	"brave":       {},
+	"edge":        {},
+	"firefox":     {},
 	"firefox-bin": {},
-	"epiphany":   {},
+	"epiphany":    {},
 }
 
 func focusedWindowPID() (int, error) {

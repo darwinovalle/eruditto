@@ -1,4 +1,5 @@
 //go:build !linux
+
 package ui
 
 // DetectPasteShortcut returns the default "ctrl+v" on non-Linux

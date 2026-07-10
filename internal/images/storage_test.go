@@ -410,32 +410,32 @@ func TestGenerateThumbnail_DimensionsWithinBounds(t *testing.T) {
 	s := newTestStorage(t)
 
 	tests := []struct {
-		name          string
-		srcW, srcH    int
-		maxPx         int
-		wantW, wantH  int
+		name         string
+		srcW, srcH   int
+		maxPx        int
+		wantW, wantH int
 	}{
 		{
-			name:  "landscape 1920x1080 → 128x72",
-			srcW:  1920, srcH: 1080,
+			name: "landscape 1920x1080 → 128x72",
+			srcW: 1920, srcH: 1080,
 			maxPx: 128,
 			wantW: 128, wantH: 72,
 		},
 		{
-			name:  "portrait 1080x1920 → 72x128",
-			srcW:  1080, srcH: 1920,
+			name: "portrait 1080x1920 → 72x128",
+			srcW: 1080, srcH: 1920,
 			maxPx: 128,
 			wantW: 72, wantH: 128,
 		},
 		{
-			name:  "square 512x512 → 128x128",
-			srcW:  512, srcH: 512,
+			name: "square 512x512 → 128x128",
+			srcW: 512, srcH: 512,
 			maxPx: 128,
 			wantW: 128, wantH: 128,
 		},
 		{
-			name:  "small image not upscaled",
-			srcW:  64, srcH: 48,
+			name: "small image not upscaled",
+			srcW: 64, srcH: 48,
 			maxPx: 128,
 			wantW: 64, wantH: 48,
 		},

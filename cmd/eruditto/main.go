@@ -13,6 +13,7 @@
 //  7. Initialize Fyne app + UI windows
 //  8. Initialize system tray
 //  9. Start clipboard monitor goroutine
+//
 // 10. Register global hotkey
 // 11. Start Fyne event loop (blocks until quit)
 // 12. Ordered shutdown
@@ -58,8 +59,8 @@ var version = "dev"
 
 const (
 	appID      = "io.github.darwinovalle.eruditto"
-	lockFile   = "eruditto.lock"   // under XDG data dir
-	socketFile = "eruditto.sock"   // under XDG data dir — IPC for --popup
+	lockFile   = "eruditto.lock" // under XDG data dir
+	socketFile = "eruditto.sock" // under XDG data dir — IPC for --popup
 )
 
 func main() {

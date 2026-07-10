@@ -59,7 +59,6 @@ const (
 	// Lower values are more responsive but use more CPU.
 	KeyPollIntervalMs = "poll_interval_ms"
 
-
 	KeyAutoPaste = "auto_paste"
 
 	// KeyPopupMouseTracking controls where the popup is placed
@@ -98,13 +97,13 @@ const (
 // DefaultSettings maps every known setting key to its default value.
 // The map is read-only at runtime — never modify it.
 var DefaultSettings = map[string]string{
-	KeyHotkey:            "ctrl+shift+z",
-	KeyMaxHistory:        "5000",
-	KeyTheme:             "dark",
-	KeyStartOnBoot:       "false",
-	KeyDatabasePath:      "",
-	KeyPollIntervalMs:    "500",
-	KeyAutoPaste:         "false",
+	KeyHotkey:             "ctrl+shift+z",
+	KeyMaxHistory:         "5000",
+	KeyTheme:              "dark",
+	KeyStartOnBoot:        "false",
+	KeyDatabasePath:       "",
+	KeyPollIntervalMs:     "500",
+	KeyAutoPaste:          "false",
 	KeyPopupMouseTracking: "true",
 	KeyVimNavigation:      "false",
 }

@@ -51,10 +51,10 @@ const popupHeight = 400
 
 // PopupWindow is the clipboard history picker.
 type PopupWindow struct {
-	app      fyne.App
-	win      fyne.Window
-	clipSvc  *clipboard.Service
-	repo     *history.Repository
+	app         fyne.App
+	win         fyne.Window
+	clipSvc     *clipboard.Service
+	repo        *history.Repository
 	settingsSvc *settings.Service
 
 	// pasteHotkey holds the global hotkey that opens the popup
@@ -105,7 +105,7 @@ type PopupWindow struct {
 	// searchBar is the label widget at the bottom of the popup
 	// that displays "/<query>" while in search mode. Hidden
 	// otherwise.
-	searchBar *widget.Label
+	searchBar   *widget.Label
 	clipList    *widget.List
 	countLabel  *widget.Label
 	statusLabel *widget.Label
@@ -404,8 +404,13 @@ func pinIcon(pinned bool) fyne.Resource {
 // Tight layout with zero spacing
 // ─────────────────────────────────────────────────────────────────────────────
 
-// tightVBox is a layout that stacks items vertically with zero padding.
-type tightVBox struct{}
+// tightVBox is a layout that stacks items vertically with a fixed gap.
+// The gap may be negative to pull items closer and cancel the internal
+// padding widget.Label adds below its text (which otherwise leaves a
+// visible blank band between the preview and the timestamp).
+type tightVBox struct {
+	gap float32
+}
 
 func (t *tightVBox) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	y := float32(0)
@@ -416,7 +421,7 @@ func (t *tightVBox) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 		h := obj.MinSize().Height
 		obj.Resize(fyne.NewSize(size.Width, h))
 		obj.Move(fyne.NewPos(0, y))
-		y += h
+		y += h + t.gap
 	}
 }
 
@@ -433,6 +438,16 @@ func (t *tightVBox) MinSize(objects []fyne.CanvasObject) fyne.Size {
 			w = min.Width
 		}
 	}
+	if len(objects) > 1 && t.gap < 0 {
+		// Only subtract gap between visible items, not after the last.
+		visible := 0
+		for _, obj := range objects {
+			if obj.Visible() {
+				visible++
+			}
+		}
+		h += t.gap * float32(visible-1)
+	}
 	return fyne.NewSize(w, h)
 }
 
@@ -444,7 +459,7 @@ type clipRow struct {
 	container    *fyne.Container
 	bgRect       *canvas.Rectangle
 	previewLabel *widget.Label
-	timeLabel    *widget.Label
+	timeLabel    *canvas.Text
 	pinBtn       *widget.Button
 	deleteBtn    *widget.Button
 	index        int
@@ -460,9 +475,14 @@ func (p *PopupWindow) createRow() fyne.CanvasObject {
 	previewLabel.Truncation = fyne.TextTruncateEllipsis
 	previewLabel.Wrapping = fyne.TextWrapOff
 
-	// Time label - small, subtle
-	timeLabel := widget.NewLabelWithStyle("", fyne.TextAlignLeading,
-		fyne.TextStyle{Italic: true})
+	// Detail label - small, subtle (fixed 10px to keep the row tight).
+	// Using canvas.Text (instead of widget.Label) lets us set an
+	// explicit TextSize; widget.Label always inherits the theme's
+	// default text size which is too tall and leaves a visible gap
+	// between the preview and the timestamp.
+	timeLabel := canvas.NewText("", theme.Color(theme.ColorNameDisabled))
+	timeLabel.TextSize = 10
+	timeLabel.TextStyle = fyne.TextStyle{Italic: true}
 
 	// Pin button
 	pinBtn := widget.NewButtonWithIcon("", pinIcon(false), nil)
@@ -475,8 +495,11 @@ func (p *PopupWindow) createRow() fyne.CanvasObject {
 	// Right side: icons horizontal
 	rightSide := container.NewHBox(pinBtn, deleteBtn)
 
-	// Main content: preview + time with ZERO gap using custom layout
-	leftContent := container.New(&tightVBox{}, previewLabel, timeLabel)
+	// Main content: preview + time. A small negative gap pulls the
+	// timestamp up to cancel the landing-padding that widget.Label
+	// adds below the preview text, so the two lines sit close together
+	// instead of with a blank band between them.
+	leftContent := container.New(&tightVBox{gap: -4}, previewLabel, timeLabel)
 
 	// Full row: left content + right icons
 	rowContent := container.NewBorder(nil, nil, nil, rightSide, leftContent)
@@ -512,11 +535,18 @@ func (p *PopupWindow) updateRow(id widget.ListItemID, obj fyne.CanvasObject) {
 	if clip.Type == domain.ClipTypeImage {
 		row.previewLabel.SetText("[image]")
 	} else {
-		row.previewLabel.SetText(clip.DisplayContent(previewMaxRunes))
+		row.previewLabel.SetText(normalizePreviewText(clip.Content, previewMaxRunes))
 	}
 
-	// Update time
-	row.timeLabel.SetText(relativeTime(clip.CreatedAt))
+	// Show the relative timestamp in the lower row so the popup
+	// still communicates when the clip was copied. The main preview
+	// above is already constrained to a single line via truncation.
+	if clip.Type == domain.ClipTypeImage {
+		row.timeLabel.Text = relativeTime(clip.CreatedAt)
+	} else {
+		row.timeLabel.Text = relativeTime(clip.CreatedAt)
+	}
+	row.timeLabel.Refresh()
 
 	// Update pin icon appearance
 	row.pinBtn.SetIcon(pinIcon(clip.IsFavorite))
@@ -992,15 +1022,17 @@ func (p *PopupWindow) enterSearchMode() {
 //
 // resetQuery=true  → drop the query, restore the unfiltered list.
 // resetQuery=false → keep the query (e.g. when the popup is
-//                    closed and reopened, we keep the query so
-//                    the search persists across hide/show).
+//
+//	closed and reopened, we keep the query so
+//	the search persists across hide/show).
 //
 // hidePopup=true   → also hide the popup after exiting
-//                    (used by Esc-in-search when the user is
-//                    cancelling). This is currently unused
-//                    because Esc-in-search only exits, not
-//                    hides, but the parameter exists for
-//                    forward-compatibility.
+//
+//	(used by Esc-in-search when the user is
+//	cancelling). This is currently unused
+//	because Esc-in-search only exits, not
+//	hides, but the parameter exists for
+//	forward-compatibility.
 func (p *PopupWindow) exitSearchMode(resetQuery bool) {
 	p.searchMode = false
 	if resetQuery {
@@ -1138,6 +1170,8 @@ func (p *PopupWindow) updateCountLabel() {
 // Pure helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+// relativeTime formats the clipboard capture time into a compact
+// human-friendly age string for display in the popup rows.
 func relativeTime(t time.Time) string {
 	diff := time.Since(t)
 	switch {
@@ -1164,6 +1198,27 @@ func relativeTime(t time.Time) string {
 	default:
 		return t.Format("Jan 2")
 	}
+}
+
+// normalizePreviewText collapses whitespace so pasted text with newlines or
+// repeated spaces stays on one visual line in the popup row, then truncates it
+// to the same compact preview width used elsewhere.
+func normalizePreviewText(content string, maxRunes int) string {
+	if maxRunes <= 0 || content == "" {
+		return ""
+	}
+	text := strings.Join(strings.Fields(content), " ")
+	if text == "" {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	if maxRunes == 1 {
+		return "…"
+	}
+	return string(runes[:maxRunes-1]) + "…"
 }
 
 func formatInt(n int) string {

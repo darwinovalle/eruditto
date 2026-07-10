@@ -511,31 +511,31 @@ func (s *Service) restoreText(ctx context.Context, clip domain.Clip) error {
 }
 
 func (s *Service) isAutoPasteEnabled(ctx context.Context) bool {
-    val, err := s.settings.Get(ctx, domain.KeyAutoPaste)
-    if err != nil {
-        return false
-    }
+	val, err := s.settings.Get(ctx, domain.KeyAutoPaste)
+	if err != nil {
+		return false
+	}
 
-    return val == "true"
+	return val == "true"
 }
 
 // IsAutoPasteEnabled returns the user's Auto Paste setting.
 func (s *Service) IsAutoPasteEnabled(ctx context.Context) bool {
-    return s.isAutoPasteEnabled(ctx)
+	return s.isAutoPasteEnabled(ctx)
 }
 
 func (s *Service) autoPaste() error {
-    // Unused. Kept as a reference for tests that may want to call
-    // it directly. The production auto-paste path lives in
-    // internal/ui/popup.go pasteClip, which captures the previously
-    // focused window via xdotool and explicitly reactivates it
-    // before sending ctrl+v. Doing it from the service layer would
-    // require plumbing the captured window ID through, and the
-    // popup already has the right context (Fyne window lifecycle).
-    //
-    // Removed the runtime body so it does not silently do the wrong
-    // thing if it is ever called.
-    return fmt.Errorf("clipboard: service.autoPaste is a no-op; use ui.AutoPaste via popup.pasteClip")
+	// Unused. Kept as a reference for tests that may want to call
+	// it directly. The production auto-paste path lives in
+	// internal/ui/popup.go pasteClip, which captures the previously
+	// focused window via xdotool and explicitly reactivates it
+	// before sending ctrl+v. Doing it from the service layer would
+	// require plumbing the captured window ID through, and the
+	// popup already has the right context (Fyne window lifecycle).
+	//
+	// Removed the runtime body so it does not silently do the wrong
+	// thing if it is ever called.
+	return fmt.Errorf("clipboard: service.autoPaste is a no-op; use ui.AutoPaste via popup.pasteClip")
 }
 
 // restoreImage is the image branch of RestoreClip.
