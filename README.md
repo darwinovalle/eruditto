@@ -1,5 +1,7 @@
 # Eruditto
 
+[![CI](https://github.com/darwinovalle/eruditto/actions/workflows/ci.yml/badge.svg)](https://github.com/darwinovalle/eruditto/actions/workflows/ci.yml)
+
 A free, lightweight clipboard manager for Linux inspired by Ditto Clipboard Manager.
 
 > **Status:** Active development — v1 in progress.
