@@ -1,0 +1,77 @@
+name: CI
+
+# Runs on every PR (against dev/main) and on every push to dev/main.
+# Each step below is a hard gate: if any fails, the PR shows a red ✗
+# and (once branch protection is enabled on `dev`) cannot be merged.
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+
+# Only the newest run matters — cancel stale runs on the same branch/PR.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: fmt · tidy · vet · build · test · vulnscan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Reads the `go` / `toolchain` directives from go.mod — the
+          # go1.26.6 toolchain line auto-applies here, no manual upgrade.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install build dependencies (CGO X11/OpenGL headers)
+        # Needed to compile the Fyne CGO stack. xclip/xdotool are
+        # runtime-only and not required to build or test.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xorg-dev libgl1-mesa-dev
+
+      - name: Check formatting (gofmt)
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::The following files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Check go.mod/go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build -o build/eruditto ./cmd/eruditto
+
+      - name: Test
+        run: go test -count=1 -timeout 60s ./...
+
+      - name: Test with race detector (concurrency safety)
+        # Eruditto is heavily concurrent (clipboard monitor, IPC listener,
+        # popup refresh). -race surfaces data races before they ship.
+        run: go test -race -count=1 -timeout 120s ./internal/...
+
+      - name: Vulnerability scan (govulncheck)
+        # Hard gate: a PR cannot re-introduce a known-vulnerable dependency.
+        # @latest keeps the scanner and its vuln DB current.
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
