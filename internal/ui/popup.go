@@ -1246,6 +1246,14 @@ func (p *PopupWindow) refreshList() {
 	p.clipList.Refresh()
 	if len(p.filtered) > 0 {
 		p.clipList.ScrollToTop()
+		// Highlight the first clip by default so the user always knows
+		// which clip Enter will paste, and so the first arrow/j-k press
+		// starts from row 0 (instead of skipping it). The navigating
+		// flag suppresses the auto-paste that onClipSelected would
+		// otherwise trigger for a programmatic Select.
+		p.navigating = true
+		p.clipList.Select(0)
+		p.navigating = false
 	}
 }
 
