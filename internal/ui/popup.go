@@ -49,6 +49,19 @@ const popupWidth = 300
 // popupHeight is the fixed height of the popup window.
 const popupHeight = 400
 
+// searchBarHeight is the fixed height of the search bar strip in
+// pixels. Keeping it constant (rather than letting the text's own
+// line height drive it) makes the bar's vertical position stable and
+// pixel-exact across fonts and text sizes.
+const searchBarHeight = 26
+
+// searchBarTextNudgeY is a small vertical offset (px) added on top of
+// geometric centering. Most fonts reserve more space above the cap
+// height than below the baseline, so a tiny positive value makes the
+// glyphs read as optically centered even though the line box is
+// centered. Tune this to taste.
+const searchBarTextNudgeY = 1
+
 // PopupWindow is the clipboard history picker.
 type PopupWindow struct {
 	app         fyne.App
@@ -102,10 +115,20 @@ type PopupWindow struct {
 	// query is the slice of characters typed after "/". Used to
 	// filter allClips into filtered.
 	query string
-	// searchBar is the label widget at the bottom of the popup
-	// that displays "/<query>" while in search mode. Hidden
-	// otherwise.
-	searchBar   *widget.Label
+	// searchBar is the text at the top of the popup that displays
+	// "/<query>" while in search mode, or a grey "type to search..."
+	// placeholder when the query is empty. Hidden otherwise.
+	//
+	// We use canvas.Text (not widget.Label) so the placeholder can be
+	// rendered in a dimmed colour — widget.Label only supports the
+	// theme foreground colour.
+	searchBar *canvas.Text
+	// searchArea is the container holding the search bar plus its
+	// divider line. Toggling visibility on the whole container (and
+	// refreshing it) reliably re-lays-out the popup, which a bare
+	// label Show()/Hide() does not always do in Fyne — otherwise the
+	// bar stays visually collapsed until some other refresh happens.
+	searchArea  *fyne.Container
 	clipList    *widget.List
 	countLabel  *widget.Label
 	statusLabel *widget.Label
@@ -286,6 +309,8 @@ func (p *PopupWindow) Show() {
 		if !p.built {
 			p.build()
 		}
+		// Return focus to canvas so arrow / j-k keys fire immediately
+		p.win.Canvas().Focus(nil)
 		// Reset slash-search state so a fresh popup opens
 		// in plain list mode, never inheriting a prior query.
 		p.exitSearchMode(false)
@@ -339,12 +364,31 @@ func (p *PopupWindow) build() {
 	// The search bar is shown only while p.searchMode is true.
 	// We hide it by default so an empty popup looks clean until
 	// the user presses "/" to enter search.
-	p.searchBar = widget.NewLabelWithStyle(
-		"",
-		fyne.TextAlignLeading,
-		fyne.TextStyle{Monospace: true},
-	)
+	p.searchBar = canvas.NewText("", theme.Color(theme.ColorNameForeground))
+	p.searchBar.Alignment = fyne.TextAlignCenter
+	p.searchBar.TextSize = theme.TextSize()
+	p.searchBar.TextStyle = fyne.TextStyle{Monospace: true}
 	p.searchBar.Hide()
+
+	// ── Search area (bar + divider) ─────────────────────────────────
+	// The whole area is toggled as one unit so showing it triggers a
+	// reliable re-layout (a bare label Show/Hide can leave the popup
+	// visually unchanged until another refresh occurs).
+	//
+	// The divider is two stacked bands: a 2px solid line plus a 3px
+	// soft shadow below it, so the boundary between the search bar and
+	// the clip list reads clearly.
+	line := canvas.NewRectangle(theme.Color(theme.ColorNameSeparator))
+	line.SetMinSize(fyne.NewSize(0, 2))
+	shadow := canvas.NewRectangle(theme.Color(theme.ColorNameShadow))
+	shadow.SetMinSize(fyne.NewSize(0, 3))
+	// The bar text is centred in a fixed-height strip via
+	// searchBarLayout so its vertical position is pixel-exact.
+	p.searchArea = container.NewVBox(
+		container.New(&searchBarLayout{height: searchBarHeight, nudgeY: searchBarTextNudgeY}, p.searchBar),
+		container.NewVBox(line, shadow),
+	)
+	p.searchArea.Hide()
 
 	// ── Clip list ─────────────────────────────────────────────────────
 	p.clipList = widget.NewList(
@@ -368,11 +412,8 @@ func (p *PopupWindow) build() {
 
 	// ── Layout ────────────────────────────────────────────────────────
 	content := container.NewBorder(
-		container.NewPadded(p.searchBar),
-		container.NewVBox(
-			widget.NewSeparator(),
-			container.NewPadded(footer),
-		),
+		p.searchArea,
+		container.NewPadded(footer),
 		nil, nil,
 		p.clipList,
 	)
@@ -449,6 +490,48 @@ func (t *tightVBox) MinSize(objects []fyne.CanvasObject) fyne.Size {
 		h += t.gap * float32(visible-1)
 	}
 	return fyne.NewSize(w, h)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Search bar layout — pixel-exact horizontal + vertical centering
+// ─────────────────────────────────────────────────────────────────────────────
+
+// searchBarLayout centers its single child (the search bar text) both
+// horizontally and vertically inside a strip of fixed searchBarHeight.
+// It exists because canvas.Text's line box is taller than the visible
+// glyphs: a bare VBox/Padded container left-aligns the text and lets
+// the line-box metrics push the glyphs off-center vertically. This
+// layout re-centers the object box, then searchBarTextNudgeY fine-tunes
+// the optical centre by a pixel or two.
+type searchBarLayout struct {
+	height float32
+	nudgeY float32
+}
+
+func (l *searchBarLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	for _, obj := range objects {
+		if !obj.Visible() {
+			continue
+		}
+		min := obj.MinSize()
+		x := (size.Width - min.Width) / 2
+		y := (size.Height-min.Height)/2 + l.nudgeY
+		obj.Move(fyne.NewPos(x, y))
+		obj.Resize(fyne.NewSize(min.Width, min.Height))
+	}
+}
+
+func (l *searchBarLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	w := float32(0)
+	for _, obj := range objects {
+		if !obj.Visible() {
+			continue
+		}
+		if m := obj.MinSize().Width; m > w {
+			w = m
+		}
+	}
+	return fyne.NewSize(w, l.height)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -557,8 +640,14 @@ func (p *PopupWindow) updateRow(id widget.ListItemID, obj fyne.CanvasObject) {
 	row.clipID = clipID
 	row.index = int(clipIdx)
 
-	row.pinBtn.OnTapped = func() { p.toggleFavorite(clipID, int(clipIdx)) }
-	row.deleteBtn.OnTapped = func() { p.confirmDelete(clipID, int(clipIdx)) }
+	row.pinBtn.OnTapped = func() {
+		p.toggleFavorite(clipID, int(clipIdx))
+		p.win.Canvas().Focus(nil)
+	}
+	row.deleteBtn.OnTapped = func() {
+		p.confirmDelete(clipID, int(clipIdx))
+		p.win.Canvas().Focus(nil)
+	}
 
 	// Background: cyan when pinned (from theme), transparent when not
 	if clip.IsFavorite {
@@ -643,6 +732,8 @@ func (p *PopupWindow) onSearchChanged(query string) {
 
 func (p *PopupWindow) onClipSelected(id widget.ListItemID) {
 	p.selectedID = id
+	// Return focus to canvas after manual selection so navigation keys continue to work
+	p.win.Canvas().Focus(nil)
 	// Suppress auto-paste when the selection came from
 	// handleArrow (programmatic) — the navigation has explicitly
 	// stepped to a row and the user must press Enter to commit.
@@ -1109,19 +1200,39 @@ func (p *PopupWindow) popQueryRune() {
 	p.query = string(runes[:len(runes)-1])
 }
 
-// updateSearchBar sets the SearchBar label to
-// "/<query>" when in search mode, "<empty>" otherwise.
-// Hidden entirely when not in search mode.
+// updateSearchBar sets the search bar content and visibility.
+// In search mode it shows "<query>" (or a dimmed placeholder when the
+// query is empty); otherwise it hides the whole search area.
 func updateSearchBar(p *PopupWindow) {
-	if p.searchBar == nil {
+	if p.searchBar == nil || p.searchArea == nil {
 		return
 	}
 	if p.searchMode {
-		p.searchBar.SetText("/" + p.query)
+		if p.query == "" {
+			p.searchBar.Text = "type to search..."
+			p.searchBar.Color = theme.Color(theme.ColorNameDisabled)
+			p.searchBar.TextStyle = fyne.TextStyle{Italic: true}
+		} else {
+			p.searchBar.Text = p.query
+			p.searchBar.Color = theme.Color(theme.ColorNameForeground)
+			p.searchBar.TextStyle = fyne.TextStyle{Monospace: true}
+		}
 		p.searchBar.Show()
+		p.searchArea.Show()
 	} else {
-		p.searchBar.SetText("")
+		p.searchBar.Text = ""
 		p.searchBar.Hide()
+		p.searchArea.Hide()
+	}
+	p.searchBar.Refresh()
+	// Force a re-layout at the window level, not just on the search
+	// area. Fyne does not reliably re-layout the popup when only a
+	// nested child toggles Show/Hide; refreshing the window content
+	// guarantees the bar (and its divider) appear as soon as "/" is
+	// pressed, not only after the first character is typed.
+	p.searchArea.Refresh()
+	if p.win != nil && p.win.Content() != nil {
+		p.win.Content().Refresh()
 	}
 }
 
