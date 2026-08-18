@@ -26,7 +26,6 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -402,13 +401,24 @@ func (p *PopupWindow) build() {
 	p.countLabel = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{})
 	p.statusLabel = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
 
-	hint := widget.NewLabelWithStyle(
-		"search:'/'  close:'esc'",
-		fyne.TextAlignTrailing,
-		fyne.TextStyle{Monospace: true},
-	)
+	// Footer is a 2×2 grid of shortcut hints, one per corner:
+	//   search:/   del:supr
+	//   exit:esc   pin:p
+	// Using the caption text size keeps the strip compact so the four
+	// hints fit on the fixed 400px popup height without crowding.
+	hintSearch := widget.NewLabelWithStyle("search:/", fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
+	hintSearch.SizeName = theme.SizeNameCaptionText
+	hintDel := widget.NewLabelWithStyle("del:supr", fyne.TextAlignTrailing, fyne.TextStyle{Monospace: true})
+	hintDel.SizeName = theme.SizeNameCaptionText
+	hintExit := widget.NewLabelWithStyle("exit:esc", fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
+	hintExit.SizeName = theme.SizeNameCaptionText
+	hintPin := widget.NewLabelWithStyle("pin:p", fyne.TextAlignTrailing, fyne.TextStyle{Monospace: true})
+	hintPin.SizeName = theme.SizeNameCaptionText
 
-	footer := container.NewHBox(layout.NewSpacer(), hint)
+	footer := container.NewGridWithColumns(2,
+		hintSearch, hintDel,
+		hintExit, hintPin,
+	)
 
 	// ── Layout ────────────────────────────────────────────────────────
 	content := container.NewBorder(
@@ -963,15 +973,18 @@ func (p *PopupWindow) handleKey(ev *fyne.KeyEvent) {
 		p.handleArrow(+1)
 
 	case fyne.KeyBackspace, fyne.KeyDelete:
-		// Backspace/Delete inside the search query: pop one
-		// rune and re-apply the filter. Outside search mode,
-		// these don't do anything (avoids swallowing text-edit
-		// intent elsewhere).
 		if p.searchMode {
+			// Backspace/Delete inside the search query: pop one
+			// rune and re-apply the filter.
 			if len(p.query) > 0 {
 				p.popQueryRune()
 				p.applyQuery()
 			}
+			return
+		}
+		// Supr/Delete outside search mode deletes the highlighted clip.
+		if ev.Name == fyne.KeyDelete {
+			p.handleDeleteHighlighted()
 		}
 
 	case fyne.KeySlash:
@@ -999,6 +1012,14 @@ func (p *PopupWindow) handleKey(ev *fyne.KeyEvent) {
 	case fyne.KeyK:
 		if p.readVimNavigationSetting() && !p.searchMode {
 			p.handleArrow(-1)
+		}
+
+	case fyne.KeyP:
+		// "p" toggles the pinned state of the highlighted clip.
+		// Only in plain list mode; in search mode "p" is a literal
+		// query character handled by handleTypedRune.
+		if !p.searchMode {
+			p.handlePinHighlighted()
 		}
 	}
 }
@@ -1062,6 +1083,40 @@ func (p *PopupWindow) handleEnter() {
 	p.clipList.Select(id)
 	p.navigating = false
 	p.pasteClip(p.filtered[id])
+}
+
+// highlightedClip returns the clip under the current selection, or
+// (false) when the list is empty or the selection is out of range.
+func (p *PopupWindow) highlightedClip() (domain.Clip, int, bool) {
+	if len(p.filtered) == 0 || p.selectedID < 0 {
+		return domain.Clip{}, 0, false
+	}
+	id := p.selectedID
+	if int(id) >= len(p.filtered) {
+		return domain.Clip{}, 0, false
+	}
+	return p.filtered[id], int(id), true
+}
+
+// handleDeleteHighlighted deletes the currently highlighted clip.
+// Shows the same confirmation dialog as the row's delete button.
+// No-op when there is no selection.
+func (p *PopupWindow) handleDeleteHighlighted() {
+	clip, idx, ok := p.highlightedClip()
+	if !ok {
+		return
+	}
+	p.confirmDelete(clip.ID, idx)
+}
+
+// handlePinHighlighted toggles the pinned state of the currently
+// highlighted clip. No-op when there is no selection.
+func (p *PopupWindow) handlePinHighlighted() {
+	clip, idx, ok := p.highlightedClip()
+	if !ok {
+		return
+	}
+	p.toggleFavorite(clip.ID, idx)
 }
 
 // handleArrow moves the highlighted row by delta (signed).
