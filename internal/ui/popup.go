@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"image/color"
 	"log/slog"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -33,6 +34,7 @@ import (
 	"github.com/darwinovalle/eruditto/internal/domain"
 	"github.com/darwinovalle/eruditto/internal/history"
 	"github.com/darwinovalle/eruditto/internal/hotkeys"
+	"github.com/darwinovalle/eruditto/internal/images"
 	"github.com/darwinovalle/eruditto/internal/settings"
 )
 
@@ -41,6 +43,11 @@ const popupPageSize = 200
 
 // previewMaxRunes is the character limit for the text preview in each row.
 const previewMaxRunes = 15
+
+// thumbSize is the display size (px) of the image thumbnail rendered in
+// each popup row. Images are shown at this size so the user can tell
+// which screenshot they are about to paste.
+const thumbSize = 32
 
 // popupWidth is the fixed width of the popup window.
 const popupWidth = 300
@@ -551,6 +558,8 @@ func (l *searchBarLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 type clipRow struct {
 	container    *fyne.Container
 	bgRect       *canvas.Rectangle
+	thumbImage   *canvas.Image
+	thumbRow     *fyne.Container
 	previewLabel *widget.Label
 	timeLabel    *canvas.Text
 	pinBtn       *widget.Button
@@ -567,6 +576,14 @@ func (p *PopupWindow) createRow() fyne.CanvasObject {
 	previewLabel := widget.NewLabel("")
 	previewLabel.Truncation = fyne.TextTruncateEllipsis
 	previewLabel.Wrapping = fyne.TextWrapOff
+
+	// Thumbnail - shown only for image clips so the user can tell which
+	// screenshot they are about to paste. Hidden for text clips. It sits
+	// inside the content stack above the timestamp so the time label
+	// renders below the image.
+	thumbImage := &canvas.Image{FillMode: canvas.ImageFillContain}
+	thumbImage.SetMinSize(fyne.NewSize(thumbSize, thumbSize))
+	thumbImage.Hide()
 
 	// Detail label - small, subtle (fixed 10px to keep the row tight).
 	// Using canvas.Text (instead of widget.Label) lets us set an
@@ -588,13 +605,17 @@ func (p *PopupWindow) createRow() fyne.CanvasObject {
 	// Right side: icons horizontal
 	rightSide := container.NewHBox(pinBtn, deleteBtn)
 
-	// Main content: preview + time. A small negative gap pulls the
-	// timestamp up to cancel the landing-padding that widget.Label
-	// adds below the preview text, so the two lines sit close together
-	// instead of with a blank band between them.
-	leftContent := container.New(&tightVBox{gap: -4}, previewLabel, timeLabel)
+	// Main content: thumbnail (image clips) or preview (text clips)
+	// stacked above the timestamp. The thumbnail is wrapped in an HBox
+	// so it stays 32px and left-aligned instead of stretching to the
+	// full row width. A small negative gap pulls the timestamp up to
+	// cancel the landing-padding that widget.Label adds below its text.
+	thumbRow := container.NewHBox(thumbImage)
+	thumbRow.Hide()
+	leftContent := container.New(&tightVBox{gap: -4}, thumbRow, previewLabel, timeLabel)
 
-	// Full row: left content + right icons
+	// Full row: content center, icons right. The tightVBox skips hidden
+	// children, so text rows (thumbRow hidden) keep their compact form.
 	rowContent := container.NewBorder(nil, nil, nil, rightSide, leftContent)
 
 	// Background + content
@@ -603,6 +624,8 @@ func (p *PopupWindow) createRow() fyne.CanvasObject {
 	row := &clipRow{
 		container:    rowContainer,
 		bgRect:       bgRect,
+		thumbImage:   thumbImage,
+		thumbRow:     thumbRow,
 		previewLabel: previewLabel,
 		timeLabel:    timeLabel,
 		pinBtn:       pinBtn,
@@ -624,21 +647,40 @@ func (p *PopupWindow) updateRow(id widget.ListItemID, obj fyne.CanvasObject) {
 		return
 	}
 
-	// Update preview text
+	// Preview content. Image clips render a thumbnail (so the user can
+	// tell which screenshot they are pasting) with the time label below
+	// it; text clips show the truncated text preview.
 	if clip.Type == domain.ClipTypeImage {
-		row.previewLabel.SetText("[image]")
+		thumbPath := images.ThumbPath(clip.ImagePath)
+		if clip.ImagePath != "" && fileExists(thumbPath) {
+			row.thumbImage.File = thumbPath
+			row.thumbImage.Refresh()
+			row.thumbRow.Show()
+			row.thumbImage.Show()
+			// Hide the text preview; the thumbnail is the visual.
+			row.previewLabel.SetText("")
+			row.previewLabel.Hide()
+		} else {
+			// No thumbnail on disk (old clip or save-time failure):
+			// fall back to the "[image]" text marker.
+			row.thumbRow.Hide()
+			row.thumbImage.Hide()
+			row.thumbImage.File = ""
+			row.previewLabel.SetText("[image]")
+			row.previewLabel.Show()
+		}
 	} else {
+		row.thumbRow.Hide()
+		row.thumbImage.Hide()
+		row.thumbImage.File = ""
 		row.previewLabel.SetText(normalizePreviewText(clip.Content, previewMaxRunes))
+		row.previewLabel.Show()
 	}
 
 	// Show the relative timestamp in the lower row so the popup
 	// still communicates when the clip was copied. The main preview
 	// above is already constrained to a single line via truncation.
-	if clip.Type == domain.ClipTypeImage {
-		row.timeLabel.Text = relativeTime(clip.CreatedAt)
-	} else {
-		row.timeLabel.Text = relativeTime(clip.CreatedAt)
-	}
+	row.timeLabel.Text = relativeTime(clip.CreatedAt)
 	row.timeLabel.Refresh()
 
 	// Update pin icon appearance
@@ -656,7 +698,6 @@ func (p *PopupWindow) updateRow(id widget.ListItemID, obj fyne.CanvasObject) {
 	}
 	row.deleteBtn.OnTapped = func() {
 		p.confirmDelete(clipID, int(clipIdx))
-		p.win.Canvas().Focus(nil)
 	}
 
 	// Background: a translucent green tint when pinned, transparent
@@ -917,19 +958,10 @@ func (p *PopupWindow) toggleFavorite(clipID int64, idx int) {
 	p.updateCountLabel()
 }
 
-// confirmDelete shows a confirmation dialog before deleting.
+// confirmDelete shows a keyboard-navigable confirmation dialog before
+// deleting the highlighted clip.
 func (p *PopupWindow) confirmDelete(clipID int64, idx int) {
-	dialog.ShowConfirm(
-		"Delete clip",
-		"Remove this item from clipboard history? This cannot be undone.",
-		func(confirmed bool) {
-			if !confirmed {
-				return
-			}
-			p.deleteClip(clipID, idx)
-		},
-		p.win,
-	)
+	newConfirmDialog(p, clipID, idx).show()
 }
 
 // deleteClip removes a clip from the repository and updates the UI.
@@ -1347,6 +1379,17 @@ func (p *PopupWindow) updateCountLabel() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Pure helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+// fileExists reports whether a regular file exists at path.
+// Used to decide between showing an image thumbnail and falling back
+// to the "[image]" text marker when the thumbnail is missing on disk.
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
+}
 
 // relativeTime formats the clipboard capture time into a compact
 // human-friendly age string for display in the popup rows.
