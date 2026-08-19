@@ -34,6 +34,23 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Configure apt sources (avoid Azure mirror hang)
+        # GitHub-hosted ubuntu runners point apt at azure.archive.ubuntu.com,
+        # which can be unreachable and makes `apt-get update` stall until the
+        # job times out (see the "Ign: http://azure.archive.ubuntu.com/..."
+        # lines in the log) while archive.ubuntu.com works fine. Rewrite the
+        # source files to the canonical mirror, then make apt fail fast on any
+        # slow/unreachable mirror so a future flake can never hang the job.
+        run: |
+          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' \
+            /etc/apt/sources.list 2>/dev/null || true
+          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' \
+            /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' \
+            /etc/apt/sources.list.d/*.list 2>/dev/null || true
+          printf 'Acquire::Retries "0";\nAcquire::http::Timeout "10";\nAcquire::https::Timeout "10";\n' \
+            | sudo tee /etc/apt/apt.conf.d/99fast-fail >/dev/null
+
       - name: Install build dependencies (CGO X11/OpenGL headers)
         # Needed to compile the Fyne CGO stack. xclip/xdotool are
         # runtime-only and not required to build or test. xvfb provides
