@@ -659,9 +659,13 @@ func (p *PopupWindow) updateRow(id widget.ListItemID, obj fyne.CanvasObject) {
 		p.win.Canvas().Focus(nil)
 	}
 
-	// Background: cyan when pinned (from theme), transparent when not
+	// Background: a translucent green tint when pinned, transparent
+	// when not. We do not reuse theme.ColorNamePrimary here because
+	// that is now a solid green (for buttons/checkmarks); a solid row
+	// background would wash out the preview text. The 64-alpha green
+	// keeps the pinned row softly highlighted instead.
 	if clip.IsFavorite {
-		row.bgRect.FillColor = theme.Color(theme.ColorNamePrimary)
+		row.bgRect.FillColor = color.RGBA{R: 46, G: 125, B: 50, A: 64}
 	} else {
 		row.bgRect.FillColor = color.Transparent
 	}
