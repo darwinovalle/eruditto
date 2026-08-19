@@ -34,29 +34,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Configure apt sources (avoid Azure mirror hang)
-        # GitHub-hosted ubuntu runners point apt at azure.archive.ubuntu.com,
-        # which can be unreachable and makes `apt-get update` stall until the
-        # job times out (see the "Ign: http://azure.archive.ubuntu.com/..."
-        # lines in the log) while archive.ubuntu.com works fine. Rewrite the
-        # source files to the canonical mirror, then make apt fail fast on any
-        # slow/unreachable mirror so a future flake can never hang the job.
-        run: |
-          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' \
-            /etc/apt/sources.list 2>/dev/null || true
-          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' \
-            /etc/apt/sources.list.d/*.sources 2>/dev/null || true
-          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' \
-            /etc/apt/sources.list.d/*.list 2>/dev/null || true
-          printf 'Acquire::Retries "0";\nAcquire::http::Timeout "10";\nAcquire::https::Timeout "10";\n' \
-            | sudo tee /etc/apt/apt.conf.d/99fast-fail >/dev/null
-
-      - name: Install build dependencies (CGO X11/OpenGL headers)
+      - name: Install build dependencies (CGO X11/OpenGL headers + xvfb)
         # Needed to compile the Fyne CGO stack. xclip/xdotool are
         # runtime-only and not required to build or test. xvfb provides
-        # a virtual X11 framebuffer so the test binaries can run: the
-        # golang.design/x/hotkey package calls displayTest() in init()
-        # and panics when no X server is reachable.
+        # a virtual framebuffer so hotkey/ui tests can open an X11
+        # connection on a headless runner.
         run: |
           sudo apt-get update
           sudo apt-get install -y xorg-dev libgl1-mesa-dev xvfb
@@ -81,10 +63,10 @@ jobs:
       - name: Build
         run: go build -o build/eruditto ./cmd/eruditto
 
-      - name: Test
-        # xvfb-run provides a virtual X11 display: golang.design/x/hotkey
-        # panics in init() without one, and it is imported (via the hotkeys
-        # and ui packages) even by pure-logic tests.
+      - name: Test (virtual display)
+        # golang.design/x/hotkey opens an X11 connection in its package
+        # init(), so hotkeys/ui tests panic without a display. xvfb-run
+        # spins up a virtual framebuffer for the duration of the run.
         run: xvfb-run -a go test -count=1 -timeout 60s ./...
 
       - name: Test with race detector (concurrency safety)
