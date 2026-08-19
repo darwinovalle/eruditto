@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"image/color"
 	"log/slog"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -26,7 +27,6 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -34,6 +34,7 @@ import (
 	"github.com/darwinovalle/eruditto/internal/domain"
 	"github.com/darwinovalle/eruditto/internal/history"
 	"github.com/darwinovalle/eruditto/internal/hotkeys"
+	"github.com/darwinovalle/eruditto/internal/images"
 	"github.com/darwinovalle/eruditto/internal/settings"
 )
 
@@ -43,11 +44,29 @@ const popupPageSize = 200
 // previewMaxRunes is the character limit for the text preview in each row.
 const previewMaxRunes = 15
 
+// thumbSize is the display size (px) of the image thumbnail rendered in
+// each popup row. Images are shown at this size so the user can tell
+// which screenshot they are about to paste.
+const thumbSize = 32
+
 // popupWidth is the fixed width of the popup window.
 const popupWidth = 300
 
 // popupHeight is the fixed height of the popup window.
 const popupHeight = 400
+
+// searchBarHeight is the fixed height of the search bar strip in
+// pixels. Keeping it constant (rather than letting the text's own
+// line height drive it) makes the bar's vertical position stable and
+// pixel-exact across fonts and text sizes.
+const searchBarHeight = 26
+
+// searchBarTextNudgeY is a small vertical offset (px) added on top of
+// geometric centering. Most fonts reserve more space above the cap
+// height than below the baseline, so a tiny positive value makes the
+// glyphs read as optically centered even though the line box is
+// centered. Tune this to taste.
+const searchBarTextNudgeY = 1
 
 // PopupWindow is the clipboard history picker.
 type PopupWindow struct {
@@ -102,10 +121,20 @@ type PopupWindow struct {
 	// query is the slice of characters typed after "/". Used to
 	// filter allClips into filtered.
 	query string
-	// searchBar is the label widget at the bottom of the popup
-	// that displays "/<query>" while in search mode. Hidden
-	// otherwise.
-	searchBar   *widget.Label
+	// searchBar is the text at the top of the popup that displays
+	// "/<query>" while in search mode, or a grey "type to search..."
+	// placeholder when the query is empty. Hidden otherwise.
+	//
+	// We use canvas.Text (not widget.Label) so the placeholder can be
+	// rendered in a dimmed colour — widget.Label only supports the
+	// theme foreground colour.
+	searchBar *canvas.Text
+	// searchArea is the container holding the search bar plus its
+	// divider line. Toggling visibility on the whole container (and
+	// refreshing it) reliably re-lays-out the popup, which a bare
+	// label Show()/Hide() does not always do in Fyne — otherwise the
+	// bar stays visually collapsed until some other refresh happens.
+	searchArea  *fyne.Container
 	clipList    *widget.List
 	countLabel  *widget.Label
 	statusLabel *widget.Label
@@ -286,6 +315,8 @@ func (p *PopupWindow) Show() {
 		if !p.built {
 			p.build()
 		}
+		// Return focus to canvas so arrow / j-k keys fire immediately
+		p.win.Canvas().Focus(nil)
 		// Reset slash-search state so a fresh popup opens
 		// in plain list mode, never inheriting a prior query.
 		p.exitSearchMode(false)
@@ -339,12 +370,31 @@ func (p *PopupWindow) build() {
 	// The search bar is shown only while p.searchMode is true.
 	// We hide it by default so an empty popup looks clean until
 	// the user presses "/" to enter search.
-	p.searchBar = widget.NewLabelWithStyle(
-		"",
-		fyne.TextAlignLeading,
-		fyne.TextStyle{Monospace: true},
-	)
+	p.searchBar = canvas.NewText("", theme.Color(theme.ColorNameForeground))
+	p.searchBar.Alignment = fyne.TextAlignCenter
+	p.searchBar.TextSize = theme.TextSize()
+	p.searchBar.TextStyle = fyne.TextStyle{Monospace: true}
 	p.searchBar.Hide()
+
+	// ── Search area (bar + divider) ─────────────────────────────────
+	// The whole area is toggled as one unit so showing it triggers a
+	// reliable re-layout (a bare label Show/Hide can leave the popup
+	// visually unchanged until another refresh occurs).
+	//
+	// The divider is two stacked bands: a 2px solid line plus a 3px
+	// soft shadow below it, so the boundary between the search bar and
+	// the clip list reads clearly.
+	line := canvas.NewRectangle(theme.Color(theme.ColorNameSeparator))
+	line.SetMinSize(fyne.NewSize(0, 2))
+	shadow := canvas.NewRectangle(theme.Color(theme.ColorNameShadow))
+	shadow.SetMinSize(fyne.NewSize(0, 3))
+	// The bar text is centred in a fixed-height strip via
+	// searchBarLayout so its vertical position is pixel-exact.
+	p.searchArea = container.NewVBox(
+		container.New(&searchBarLayout{height: searchBarHeight, nudgeY: searchBarTextNudgeY}, p.searchBar),
+		container.NewVBox(line, shadow),
+	)
+	p.searchArea.Hide()
 
 	// ── Clip list ─────────────────────────────────────────────────────
 	p.clipList = widget.NewList(
@@ -358,21 +408,29 @@ func (p *PopupWindow) build() {
 	p.countLabel = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{})
 	p.statusLabel = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
 
-	hint := widget.NewLabelWithStyle(
-		"search:'/'  close:'esc'",
-		fyne.TextAlignTrailing,
-		fyne.TextStyle{Monospace: true},
-	)
+	// Footer is a 2×2 grid of shortcut hints, one per corner:
+	//   search:/   del:supr
+	//   exit:esc   pin:p
+	// Using the caption text size keeps the strip compact so the four
+	// hints fit on the fixed 400px popup height without crowding.
+	hintSearch := widget.NewLabelWithStyle("search:/", fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
+	hintSearch.SizeName = theme.SizeNameCaptionText
+	hintDel := widget.NewLabelWithStyle("del:supr", fyne.TextAlignTrailing, fyne.TextStyle{Monospace: true})
+	hintDel.SizeName = theme.SizeNameCaptionText
+	hintExit := widget.NewLabelWithStyle("exit:esc", fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
+	hintExit.SizeName = theme.SizeNameCaptionText
+	hintPin := widget.NewLabelWithStyle("pin:p", fyne.TextAlignTrailing, fyne.TextStyle{Monospace: true})
+	hintPin.SizeName = theme.SizeNameCaptionText
 
-	footer := container.NewHBox(layout.NewSpacer(), hint)
+	footer := container.NewGridWithColumns(2,
+		hintSearch, hintDel,
+		hintExit, hintPin,
+	)
 
 	// ── Layout ────────────────────────────────────────────────────────
 	content := container.NewBorder(
-		container.NewPadded(p.searchBar),
-		container.NewVBox(
-			widget.NewSeparator(),
-			container.NewPadded(footer),
-		),
+		p.searchArea,
+		container.NewPadded(footer),
 		nil, nil,
 		p.clipList,
 	)
@@ -452,12 +510,56 @@ func (t *tightVBox) MinSize(objects []fyne.CanvasObject) fyne.Size {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Search bar layout — pixel-exact horizontal + vertical centering
+// ─────────────────────────────────────────────────────────────────────────────
+
+// searchBarLayout centers its single child (the search bar text) both
+// horizontally and vertically inside a strip of fixed searchBarHeight.
+// It exists because canvas.Text's line box is taller than the visible
+// glyphs: a bare VBox/Padded container left-aligns the text and lets
+// the line-box metrics push the glyphs off-center vertically. This
+// layout re-centers the object box, then searchBarTextNudgeY fine-tunes
+// the optical centre by a pixel or two.
+type searchBarLayout struct {
+	height float32
+	nudgeY float32
+}
+
+func (l *searchBarLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	for _, obj := range objects {
+		if !obj.Visible() {
+			continue
+		}
+		min := obj.MinSize()
+		x := (size.Width - min.Width) / 2
+		y := (size.Height-min.Height)/2 + l.nudgeY
+		obj.Move(fyne.NewPos(x, y))
+		obj.Resize(fyne.NewSize(min.Width, min.Height))
+	}
+}
+
+func (l *searchBarLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	w := float32(0)
+	for _, obj := range objects {
+		if !obj.Visible() {
+			continue
+		}
+		if m := obj.MinSize().Width; m > w {
+			w = m
+		}
+	}
+	return fyne.NewSize(w, l.height)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // List row construction — Ultra-compact with zero-gap layout
 // ─────────────────────────────────────────────────────────────────────────────
 
 type clipRow struct {
 	container    *fyne.Container
 	bgRect       *canvas.Rectangle
+	thumbImage   *canvas.Image
+	thumbRow     *fyne.Container
 	previewLabel *widget.Label
 	timeLabel    *canvas.Text
 	pinBtn       *widget.Button
@@ -474,6 +576,14 @@ func (p *PopupWindow) createRow() fyne.CanvasObject {
 	previewLabel := widget.NewLabel("")
 	previewLabel.Truncation = fyne.TextTruncateEllipsis
 	previewLabel.Wrapping = fyne.TextWrapOff
+
+	// Thumbnail - shown only for image clips so the user can tell which
+	// screenshot they are about to paste. Hidden for text clips. It sits
+	// inside the content stack above the timestamp so the time label
+	// renders below the image.
+	thumbImage := &canvas.Image{FillMode: canvas.ImageFillContain}
+	thumbImage.SetMinSize(fyne.NewSize(thumbSize, thumbSize))
+	thumbImage.Hide()
 
 	// Detail label - small, subtle (fixed 10px to keep the row tight).
 	// Using canvas.Text (instead of widget.Label) lets us set an
@@ -495,13 +605,17 @@ func (p *PopupWindow) createRow() fyne.CanvasObject {
 	// Right side: icons horizontal
 	rightSide := container.NewHBox(pinBtn, deleteBtn)
 
-	// Main content: preview + time. A small negative gap pulls the
-	// timestamp up to cancel the landing-padding that widget.Label
-	// adds below the preview text, so the two lines sit close together
-	// instead of with a blank band between them.
-	leftContent := container.New(&tightVBox{gap: -4}, previewLabel, timeLabel)
+	// Main content: thumbnail (image clips) or preview (text clips)
+	// stacked above the timestamp. The thumbnail is wrapped in an HBox
+	// so it stays 32px and left-aligned instead of stretching to the
+	// full row width. A small negative gap pulls the timestamp up to
+	// cancel the landing-padding that widget.Label adds below its text.
+	thumbRow := container.NewHBox(thumbImage)
+	thumbRow.Hide()
+	leftContent := container.New(&tightVBox{gap: -4}, thumbRow, previewLabel, timeLabel)
 
-	// Full row: left content + right icons
+	// Full row: content center, icons right. The tightVBox skips hidden
+	// children, so text rows (thumbRow hidden) keep their compact form.
 	rowContent := container.NewBorder(nil, nil, nil, rightSide, leftContent)
 
 	// Background + content
@@ -510,6 +624,8 @@ func (p *PopupWindow) createRow() fyne.CanvasObject {
 	row := &clipRow{
 		container:    rowContainer,
 		bgRect:       bgRect,
+		thumbImage:   thumbImage,
+		thumbRow:     thumbRow,
 		previewLabel: previewLabel,
 		timeLabel:    timeLabel,
 		pinBtn:       pinBtn,
@@ -531,21 +647,40 @@ func (p *PopupWindow) updateRow(id widget.ListItemID, obj fyne.CanvasObject) {
 		return
 	}
 
-	// Update preview text
+	// Preview content. Image clips render a thumbnail (so the user can
+	// tell which screenshot they are pasting) with the time label below
+	// it; text clips show the truncated text preview.
 	if clip.Type == domain.ClipTypeImage {
-		row.previewLabel.SetText("[image]")
+		thumbPath := images.ThumbPath(clip.ImagePath)
+		if clip.ImagePath != "" && fileExists(thumbPath) {
+			row.thumbImage.File = thumbPath
+			row.thumbImage.Refresh()
+			row.thumbRow.Show()
+			row.thumbImage.Show()
+			// Hide the text preview; the thumbnail is the visual.
+			row.previewLabel.SetText("")
+			row.previewLabel.Hide()
+		} else {
+			// No thumbnail on disk (old clip or save-time failure):
+			// fall back to the "[image]" text marker.
+			row.thumbRow.Hide()
+			row.thumbImage.Hide()
+			row.thumbImage.File = ""
+			row.previewLabel.SetText("[image]")
+			row.previewLabel.Show()
+		}
 	} else {
+		row.thumbRow.Hide()
+		row.thumbImage.Hide()
+		row.thumbImage.File = ""
 		row.previewLabel.SetText(normalizePreviewText(clip.Content, previewMaxRunes))
+		row.previewLabel.Show()
 	}
 
 	// Show the relative timestamp in the lower row so the popup
 	// still communicates when the clip was copied. The main preview
 	// above is already constrained to a single line via truncation.
-	if clip.Type == domain.ClipTypeImage {
-		row.timeLabel.Text = relativeTime(clip.CreatedAt)
-	} else {
-		row.timeLabel.Text = relativeTime(clip.CreatedAt)
-	}
+	row.timeLabel.Text = relativeTime(clip.CreatedAt)
 	row.timeLabel.Refresh()
 
 	// Update pin icon appearance
@@ -557,12 +692,21 @@ func (p *PopupWindow) updateRow(id widget.ListItemID, obj fyne.CanvasObject) {
 	row.clipID = clipID
 	row.index = int(clipIdx)
 
-	row.pinBtn.OnTapped = func() { p.toggleFavorite(clipID, int(clipIdx)) }
-	row.deleteBtn.OnTapped = func() { p.confirmDelete(clipID, int(clipIdx)) }
+	row.pinBtn.OnTapped = func() {
+		p.toggleFavorite(clipID, int(clipIdx))
+		p.win.Canvas().Focus(nil)
+	}
+	row.deleteBtn.OnTapped = func() {
+		p.confirmDelete(clipID, int(clipIdx))
+	}
 
-	// Background: cyan when pinned (from theme), transparent when not
+	// Background: a translucent green tint when pinned, transparent
+	// when not. We do not reuse theme.ColorNamePrimary here because
+	// that is now a solid green (for buttons/checkmarks); a solid row
+	// background would wash out the preview text. The 64-alpha green
+	// keeps the pinned row softly highlighted instead.
 	if clip.IsFavorite {
-		row.bgRect.FillColor = theme.Color(theme.ColorNamePrimary)
+		row.bgRect.FillColor = color.RGBA{R: 46, G: 125, B: 50, A: 64}
 	} else {
 		row.bgRect.FillColor = color.Transparent
 	}
@@ -643,6 +787,8 @@ func (p *PopupWindow) onSearchChanged(query string) {
 
 func (p *PopupWindow) onClipSelected(id widget.ListItemID) {
 	p.selectedID = id
+	// Return focus to canvas after manual selection so navigation keys continue to work
+	p.win.Canvas().Focus(nil)
 	// Suppress auto-paste when the selection came from
 	// handleArrow (programmatic) — the navigation has explicitly
 	// stepped to a row and the user must press Enter to commit.
@@ -812,19 +958,10 @@ func (p *PopupWindow) toggleFavorite(clipID int64, idx int) {
 	p.updateCountLabel()
 }
 
-// confirmDelete shows a confirmation dialog before deleting.
+// confirmDelete shows a keyboard-navigable confirmation dialog before
+// deleting the highlighted clip.
 func (p *PopupWindow) confirmDelete(clipID int64, idx int) {
-	dialog.ShowConfirm(
-		"Delete clip",
-		"Remove this item from clipboard history? This cannot be undone.",
-		func(confirmed bool) {
-			if !confirmed {
-				return
-			}
-			p.deleteClip(clipID, idx)
-		},
-		p.win,
-	)
+	newConfirmDialog(p, clipID, idx).show()
 }
 
 // deleteClip removes a clip from the repository and updates the UI.
@@ -872,15 +1009,18 @@ func (p *PopupWindow) handleKey(ev *fyne.KeyEvent) {
 		p.handleArrow(+1)
 
 	case fyne.KeyBackspace, fyne.KeyDelete:
-		// Backspace/Delete inside the search query: pop one
-		// rune and re-apply the filter. Outside search mode,
-		// these don't do anything (avoids swallowing text-edit
-		// intent elsewhere).
 		if p.searchMode {
+			// Backspace/Delete inside the search query: pop one
+			// rune and re-apply the filter.
 			if len(p.query) > 0 {
 				p.popQueryRune()
 				p.applyQuery()
 			}
+			return
+		}
+		// Supr/Delete outside search mode deletes the highlighted clip.
+		if ev.Name == fyne.KeyDelete {
+			p.handleDeleteHighlighted()
 		}
 
 	case fyne.KeySlash:
@@ -908,6 +1048,14 @@ func (p *PopupWindow) handleKey(ev *fyne.KeyEvent) {
 	case fyne.KeyK:
 		if p.readVimNavigationSetting() && !p.searchMode {
 			p.handleArrow(-1)
+		}
+
+	case fyne.KeyP:
+		// "p" toggles the pinned state of the highlighted clip.
+		// Only in plain list mode; in search mode "p" is a literal
+		// query character handled by handleTypedRune.
+		if !p.searchMode {
+			p.handlePinHighlighted()
 		}
 	}
 }
@@ -971,6 +1119,40 @@ func (p *PopupWindow) handleEnter() {
 	p.clipList.Select(id)
 	p.navigating = false
 	p.pasteClip(p.filtered[id])
+}
+
+// highlightedClip returns the clip under the current selection, or
+// (false) when the list is empty or the selection is out of range.
+func (p *PopupWindow) highlightedClip() (domain.Clip, int, bool) {
+	if len(p.filtered) == 0 || p.selectedID < 0 {
+		return domain.Clip{}, 0, false
+	}
+	id := p.selectedID
+	if int(id) >= len(p.filtered) {
+		return domain.Clip{}, 0, false
+	}
+	return p.filtered[id], int(id), true
+}
+
+// handleDeleteHighlighted deletes the currently highlighted clip.
+// Shows the same confirmation dialog as the row's delete button.
+// No-op when there is no selection.
+func (p *PopupWindow) handleDeleteHighlighted() {
+	clip, idx, ok := p.highlightedClip()
+	if !ok {
+		return
+	}
+	p.confirmDelete(clip.ID, idx)
+}
+
+// handlePinHighlighted toggles the pinned state of the currently
+// highlighted clip. No-op when there is no selection.
+func (p *PopupWindow) handlePinHighlighted() {
+	clip, idx, ok := p.highlightedClip()
+	if !ok {
+		return
+	}
+	p.toggleFavorite(clip.ID, idx)
 }
 
 // handleArrow moves the highlighted row by delta (signed).
@@ -1109,19 +1291,39 @@ func (p *PopupWindow) popQueryRune() {
 	p.query = string(runes[:len(runes)-1])
 }
 
-// updateSearchBar sets the SearchBar label to
-// "/<query>" when in search mode, "<empty>" otherwise.
-// Hidden entirely when not in search mode.
+// updateSearchBar sets the search bar content and visibility.
+// In search mode it shows "<query>" (or a dimmed placeholder when the
+// query is empty); otherwise it hides the whole search area.
 func updateSearchBar(p *PopupWindow) {
-	if p.searchBar == nil {
+	if p.searchBar == nil || p.searchArea == nil {
 		return
 	}
 	if p.searchMode {
-		p.searchBar.SetText("/" + p.query)
+		if p.query == "" {
+			p.searchBar.Text = "type to search..."
+			p.searchBar.Color = theme.Color(theme.ColorNameDisabled)
+			p.searchBar.TextStyle = fyne.TextStyle{Italic: true}
+		} else {
+			p.searchBar.Text = p.query
+			p.searchBar.Color = theme.Color(theme.ColorNameForeground)
+			p.searchBar.TextStyle = fyne.TextStyle{Monospace: true}
+		}
 		p.searchBar.Show()
+		p.searchArea.Show()
 	} else {
-		p.searchBar.SetText("")
+		p.searchBar.Text = ""
 		p.searchBar.Hide()
+		p.searchArea.Hide()
+	}
+	p.searchBar.Refresh()
+	// Force a re-layout at the window level, not just on the search
+	// area. Fyne does not reliably re-layout the popup when only a
+	// nested child toggles Show/Hide; refreshing the window content
+	// guarantees the bar (and its divider) appear as soon as "/" is
+	// pressed, not only after the first character is typed.
+	p.searchArea.Refresh()
+	if p.win != nil && p.win.Content() != nil {
+		p.win.Content().Refresh()
 	}
 }
 
@@ -1135,6 +1337,14 @@ func (p *PopupWindow) refreshList() {
 	p.clipList.Refresh()
 	if len(p.filtered) > 0 {
 		p.clipList.ScrollToTop()
+		// Highlight the first clip by default so the user always knows
+		// which clip Enter will paste, and so the first arrow/j-k press
+		// starts from row 0 (instead of skipping it). The navigating
+		// flag suppresses the auto-paste that onClipSelected would
+		// otherwise trigger for a programmatic Select.
+		p.navigating = true
+		p.clipList.Select(0)
+		p.navigating = false
 	}
 }
 
@@ -1169,6 +1379,17 @@ func (p *PopupWindow) updateCountLabel() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Pure helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+// fileExists reports whether a regular file exists at path.
+// Used to decide between showing an image thumbnail and falling back
+// to the "[image]" text marker when the thumbnail is missing on disk.
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
+}
 
 // relativeTime formats the clipboard capture time into a compact
 // human-friendly age string for display in the popup rows.
