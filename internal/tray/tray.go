@@ -122,15 +122,8 @@ func (t *Tray) onReady() {
 	mHistory := systray.AddMenuItem("Open History", "Show clipboard history (Ctrl+Shift+V)")
 	systray.AddSeparator()
 	mSettings := systray.AddMenuItem("Settings", "Configure Eruditto")
-	mAbout := systray.AddMenuItem(
-		fmt.Sprintf("About Eruditto %s", t.version),
-		"Version information",
-	)
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit Eruditto", "Stop Eruditto and remove from tray")
-
-	// About is informational only — shows the version string, no action.
-	mAbout.Disable()
 
 	go t.handleEvents(mHistory, mSettings, mQuit)
 }
