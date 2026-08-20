@@ -142,10 +142,16 @@ If you need to build step by step:
 go build -ldflags "-s -w -X main.version=0.1.0" \
   -o packaging/deb/eruditto/usr/bin/eruditto ./cmd/eruditto
 
-# 2. Sync DEBIAN/control version
+# 2. Stage the desktop entry (registers the app in the launcher and
+#    gives the dock a matching icon via StartupWMClass)
+mkdir -p packaging/deb/eruditto/usr/share/applications
+cp packaging/deb/eruditto.desktop \
+  packaging/deb/eruditto/usr/share/applications/eruditto.desktop
+
+# 3. Sync DEBIAN/control version
 sed -i 's/^Version: .*/Version: 0.1.0/' packaging/deb/eruditto/DEBIAN/control
 
-# 3. Package
+# 4. Package
 dpkg-deb --build packaging/deb/eruditto build/eruditto_0.1.0_amd64.deb
 ```
 
