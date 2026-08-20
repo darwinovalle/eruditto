@@ -114,11 +114,49 @@ wired in `main.go`.
 
 ## Git workflow
 
-- `main` is **release-only**. All work lands on `dev` first.
-- Workflow: **feature branch → PR → merge into `dev` → merge into `main`**.
-- Your branch should be short-lived and named after the work (e.g.
-  `fix/popup-position`, `feat/image-ocr`).
-- Before opening a PR: `make fmt && make vet && make test`.
+All changes are submitted through pull requests to the protected `main`
+branch. Do not push directly to `main`.
+
+1. Fork the repository (if you do not have write access), then clone it and
+   start from the latest `main` branch:
+
+   ```bash
+   git clone <your-fork-url> eruditto
+   cd eruditto
+   git switch main
+   git pull --ff-only origin main
+   ```
+
+2. Create a short-lived branch named after the work, for example
+   `fix/popup-position` or `feat/image-ocr`:
+
+   ```bash
+   git switch -c fix/describe-your-change
+   ```
+
+3. Make and test your changes, then commit them with signed commits and push
+   the branch to your fork:
+
+   ```bash
+   make fmt
+   make vet
+   make test
+   git add .
+   git commit -S -m "Describe the change"
+   git push -u origin fix/describe-your-change
+   ```
+
+4. Open a pull request from your branch to `main`. The CI checks must pass,
+   the branch must be up to date, and all review conversations must be
+   resolved. At least one approval from the project maintainer/code owner is
+   required before the maintainer merges the pull request.
+
+CI checks formatting, module tidiness, vetting, building, tests (including the
+race detector), and known dependency vulnerabilities.
+
+Additional commits pushed to the branch may dismiss existing approvals, so
+please allow the checks and review to complete before requesting the final
+merge.
 
 If you're fixing a bug, it helps to include the debug-log output that shows
 the failure (run `./eruditto -debug`).

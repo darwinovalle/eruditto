@@ -1,13 +1,13 @@
 name: CI
 
-# Runs on every PR (against dev/main) and on every push to dev/main.
+# Runs on every PR against `main` and on every push to `main`.
 # Each step below is a hard gate: if any fails, the PR shows a red ✗
-# and (once branch protection is enabled on `dev`) cannot be merged.
+# and cannot be merged while the required status check is failing.
 on:
   pull_request:
-    branches: [dev, main]
+    branches: [main]
   push:
-    branches: [dev, main]
+    branches: [main]
 
 # Only the newest run matters — cancel stale runs on the same branch/PR.
 concurrency:
