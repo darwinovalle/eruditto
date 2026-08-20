@@ -212,8 +212,8 @@ func (s *SettingsWindow) buildContent() {
 	// hover is a translucent dark tint — Fyne alpha-blends the hover over the
 	// background, so an opaque hover would wash the button out (the exact bug
 	// that made the green Save button vanish on hover).
-	cyanBG    := color.RGBA{0, 140, 180, 255}
-	whiteFG   := color.RGBA{255, 255, 255, 255}
+	cyanBG := color.RGBA{0, 140, 180, 255}
+	whiteFG := color.RGBA{255, 255, 255, 255}
 	cyanHover := color.RGBA{0, 0, 0, 55}
 
 	clearBtn := newSolidButton("Clear all history…", cyanBG, whiteFG, cyanHover, func() {
