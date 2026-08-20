@@ -1,4 +1,5 @@
 # Eruditto
+[![Website](https://img.shields.io/badge/Website-2CA5E0?style=for-the-badge&logoColor=white)](https://eruditto.app/)
 
 [![CI](https://github.com/darwinovalle/eruditto/actions/workflows/ci.yml/badge.svg)](https://github.com/darwinovalle/eruditto/actions/workflows/ci.yml)
 
