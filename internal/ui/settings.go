@@ -34,7 +34,6 @@ type SettingsWindow struct {
 	repo            *history.Repository
 	dataDir         string
 	onHotkeyChanged func(newShortcut hotkeys.Shortcut) error
-	built           bool
 }
 
 func NewSettingsWindow(
@@ -62,13 +61,29 @@ func NewSettingsWindow(
 }
 
 func (s *SettingsWindow) Show() {
-	if !s.built {
-		s.buildWindow()
-	}
-	s.loadValues()
-	s.win.Show()
-	s.win.RequestFocus()
+	// All window work must run on the Fyne main thread. The tray menu
+	// invokes this callback from the systray goroutine; without fyne.Do
+	// the widget tree is built off-main and Fyne logs "should have been
+	// called in fyne.Do[AndWait]" while corrupting renderer state, which
+	// after several open/close cycles left the settings window (or its
+	// buttons) no longer displaying.
+	//
+	// The widget tree is rebuilt on every show so stale state can never
+	// accumulate; the window itself is created once and reused. The title
+	// bar X hides the window (like the popup) instead of closing it, so
+	// reopening always works — a closed Fyne window cannot be re-shown.
 	fyne.Do(func() {
+		if s.win == nil {
+			s.win = s.app.NewWindow("Settings")
+			s.win.Resize(fyne.NewSize(480, 300))
+			s.win.SetFixedSize(false)
+			s.win.SetCloseIntercept(s.Hide)
+			s.win.SetOnClosed(func() {})
+		}
+		s.buildContent()
+		s.loadValues()
+		s.win.Show()
+		s.win.RequestFocus()
 		s.win.CenterOnScreen()
 	})
 }
@@ -98,11 +113,7 @@ type settingsForm struct {
 
 var sf settingsForm
 
-func (s *SettingsWindow) buildWindow() {
-	s.win = s.app.NewWindow("Settings")
-	s.win.Resize(fyne.NewSize(480, 300))
-	s.win.SetFixedSize(false)
-
+func (s *SettingsWindow) buildContent() {
 	// ── Hotkey field ──────────────────────────────────────────────────
 	sf.hotkeyEntry = widget.NewEntry()
 	sf.hotkeyEntry.SetPlaceHolder("ctrl+shift+v")
@@ -302,7 +313,6 @@ func (s *SettingsWindow) buildWindow() {
 	)
 
 	s.win.SetContent(container.NewPadded(content))
-	s.built = true
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
