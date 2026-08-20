@@ -700,13 +700,15 @@ func (p *PopupWindow) updateRow(id widget.ListItemID, obj fyne.CanvasObject) {
 		p.confirmDelete(clipID, int(clipIdx))
 	}
 
-	// Background: a translucent green tint when pinned, transparent
+	// Background: a translucent cyan tint when pinned, transparent
 	// when not. We do not reuse theme.ColorNamePrimary here because
 	// that is now a solid green (for buttons/checkmarks); a solid row
-	// background would wash out the preview text. The 64-alpha green
-	// keeps the pinned row softly highlighted instead.
+	// background would wash out the preview text. The 64-alpha cyan
+	// (#00FFFF) keeps the pinned row softly highlighted in both light
+	// and dark themes — it never overlaps with the green primary used
+	// elsewhere in the UI, so the user always knows "cyan = pinned".
 	if clip.IsFavorite {
-		row.bgRect.FillColor = color.RGBA{R: 46, G: 125, B: 50, A: 64}
+		row.bgRect.FillColor = color.RGBA{R: 0, G: 255, B: 255, A: 64}
 	} else {
 		row.bgRect.FillColor = color.Transparent
 	}
