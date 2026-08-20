@@ -4,6 +4,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"log"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/darwinovalle/eruditto/internal/autostart"
@@ -194,7 +196,16 @@ func (s *SettingsWindow) buildWindow() {
 	go s.loadStats()
 
 	// ── Danger zone ───────────────────────────────────────────────────
-	clearBtn := widget.NewButton("Clear all history…", func() {
+	// The two history buttons get a translucent cyan background (white text)
+	// so they read as visible secondary actions against the green Save. The
+	// hover is a translucent dark tint — Fyne alpha-blends the hover over the
+	// background, so an opaque hover would wash the button out (the exact bug
+	// that made the green Save button vanish on hover).
+	cyanBG    := color.RGBA{0, 140, 180, 255}
+	whiteFG   := color.RGBA{255, 255, 255, 255}
+	cyanHover := color.RGBA{0, 0, 0, 55}
+
+	clearBtn := newSolidButton("Clear all history…", cyanBG, whiteFG, cyanHover, func() {
 		dialog.ShowConfirm(
 			"Clear all clipboard history",
 			"This permanently deletes all clips that are not pinned.\n"+
@@ -207,17 +218,24 @@ func (s *SettingsWindow) buildWindow() {
 			s.win,
 		)
 	})
-	clearBtn.Importance = widget.LowImportance
 
-	openDataDirBtn := widget.NewButton("Open data directory", func() {
+	openDataDirBtn := newSolidButton("Open data directory", cyanBG, whiteFG, cyanHover, func() {
 		s.openDataDir()
 	})
-	openDataDirBtn.Importance = widget.LowImportance
 
 	// ── Action buttons ────────────────────────────────────────────────
-	cancelBtn := widget.NewButton("Cancel", func() { s.Hide() })
-	saveBtn := widget.NewButton("Save", func() { s.save() })
-	saveBtn.Importance = widget.HighImportance
+	// Cancel is a ghost button: transparent body, normal text, 1px border.
+	borderColor := theme.Current().Color(
+		theme.ColorNameInputBorder,
+		fyne.CurrentApp().Settings().ThemeVariant(),
+	)
+	cancelBtn := newOutlinedButton("Cancel", borderColor, color.RGBA{128, 128, 128, 45}, func() { s.Hide() })
+
+	// Save stays green (HighImportance) but its hover is re-themed to a
+	// translucent dark so it darkens on hover instead of washing out to white.
+	saveWidget := widget.NewButton("Save", func() { s.save() })
+	saveWidget.Importance = widget.HighImportance
+	saveBtn := withButtonHover(saveWidget, color.RGBA{0, 0, 0, 60})
 
 	// ── Form layout — Clean aligned labels like mockup ─────────────────
 	form := widget.NewForm(
