@@ -57,6 +57,10 @@ deb: vet test
 	@cp assets/icons/small_white_icon.png  $(DEB_ROOT)/usr/share/icons/hicolor/32x32/apps/eruditto.png
 	@cp assets/icons/medium_white_icon.png $(DEB_ROOT)/usr/share/icons/hicolor/64x64/apps/eruditto.png
 	@cp assets/icons/larger_white_icon.png $(DEB_ROOT)/usr/share/icons/hicolor/128x128/apps/eruditto.png
+	# The .desktop entry registers the app in the launcher ("Show Apps")
+	# and its StartupWMClass lets the dock show the icon when the popup
+	# appears. The postinst refreshes the desktop database afterwards.
+	@cp packaging/deb/eruditto.desktop $(DEB_ROOT)/usr/share/applications/eruditto.desktop
 	# Build the binary into the install root.
 	@go build -ldflags "-s -w -X main.version=$(VERSION)" -o $(DEB_ROOT)/usr/bin/eruditto ./cmd/eruditto
 	# Stamp the version into DEBIAN/control.

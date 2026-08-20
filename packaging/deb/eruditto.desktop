@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Eruditto
+GenericName=Clipboard Manager
+Comment=Ditto-inspired clipboard manager with image support
+Exec=/usr/bin/eruditto
+Icon=eruditto
+Terminal=false
+Categories=Utility;Office;
+StartupNotify=true
+StartupWMClass=io.github.darwinovalle.eruditto
