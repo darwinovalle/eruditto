@@ -570,7 +570,7 @@ type clipRow struct {
 
 func (p *PopupWindow) createRow() fyne.CanvasObject {
 	// Background rectangle for pinned highlight
-	bgRect := canvas.NewRectangle(nil)
+	bgRect := canvas.NewRectangle(color.Transparent)
 
 	// Preview label - main content, single line
 	previewLabel := widget.NewLabel("")
