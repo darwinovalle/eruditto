@@ -1,4 +1,10 @@
 # Eruditto
+<div align="center">
+<img width="60%" height="200" alt="Image" src="https://github.com/user-attachments/assets/4444fb56-0f20-4b97-a3c5-30f222135169" />
+  
+</div>
+<br>
+
 [![Website](https://img.shields.io/badge/Website-2CA5E0?style=for-the-badge&logoColor=white)](https://eruditto.app/)
 
 [![CI](https://github.com/darwinovalle/eruditto/actions/workflows/ci.yml/badge.svg)](https://github.com/darwinovalle/eruditto/actions/workflows/ci.yml)
